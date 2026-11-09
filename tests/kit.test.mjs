@@ -1,0 +1,41 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { install } from '../src/install.mjs';
+import { inspectProject } from '../src/doctor.mjs';
+import { backendName, workerInvocation } from '../src/backends.mjs';
+import { parseBatch } from '../src/orchestrator.mjs';
+test('doctor reports capabilities without changing them', () => {
+  const dir=mkdtempSync(join(tmpdir(),'iwsdk-doctor-'));
+  writeFileSync(join(dir,'package.json'),JSON.stringify({scripts:{build:'vite build'},dependencies:{'@iwsdk/core':'1.1.0'}}));
+  writeFileSync(join(dir,'iwsdk.config.json'),JSON.stringify({world:{features:{physics:false,grabbing:true}}}));
+  const info=inspectProject(dir);
+  assert.equal(info.capabilities.grabbing,true);
+  assert.equal(info.capabilities.physics,false);
+  assert.equal(info.scripts.build,'vite build');
+});
+test('installer preserves existing agent instructions and is idempotent', () => {
+  const dir=mkdtempSync(join(tmpdir(),'iwsdk-install-'));
+  writeFileSync(join(dir,'package.json'),JSON.stringify({scripts:{test:'node --test'}}));
+  writeFileSync(join(dir,'AGENTS.md'),'# My custom project rules\n');
+  writeFileSync(join(dir,'CLAUDE.md'),'# Claude project rules\n');
+  const preview=install(dir,{dryRun:true});
+  assert.ok(preview.some(x=>x.action==='create'));
+  install(dir);
+  const first=readFileSync(join(dir,'AGENTS.md'),'utf8');
+  assert.match(first,/My custom project rules/);
+  assert.match(first,/iwsdk-agent-kit:start/);
+  install(dir);
+  assert.equal(readFileSync(join(dir,'AGENTS.md'),'utf8'),first);
+  assert.equal(JSON.parse(readFileSync(join(dir,'package.json'),'utf8')).scripts['agents:plan'],'node scripts/agents.mjs plan');
+});
+test('backends are explicit and batch configuration validates', () => {
+  assert.equal(backendName(),'codex');
+  assert.throws(()=>backendName('bad'),/Unsupported/);
+  const f={worktree:'/tmp/feature',attemptDirectory:'/tmp/logs'};
+  for(const backend of ['codex','claude','opencode']) assert.ok(workerInvocation(backend,f,'/tmp/git','Implement').command);
+  const batch=parseBatch({id:'sample',features:[{id:'first',description:'Build feature',owns:['src/feature/'],acceptance:['Works'],interfaces:'none',contentChanges:false,runtimeRequired:false}]});
+  assert.equal(batch.backend,'codex');
+});
