@@ -87,7 +87,7 @@ function clean(cwd) { return git(cwd, 'status', '--porcelain', '--untracked-file
 function context(cwd = process.cwd()) {
   const repo = git(cwd, 'rev-parse', '--show-toplevel');
   const common = resolve(cwd, git(cwd, 'rev-parse', '--git-common-dir'));
-  return { repo, common, root: join(common, 'agent-workflow'), worktreeRoot: join(dirname(repo), '.gatekeeper-agent-worktrees', createHash('sha256').update(common).digest('hex').slice(0, 12)) };
+  return { repo, common, root: join(common, 'agent-workflow'), worktreeRoot: join(dirname(repo), '.iwsdk-agent-worktrees', createHash('sha256').update(common).digest('hex').slice(0, 12)) };
 }
 function save(state) { atomic(join(state.directory, 'state.json'), state); }
 function load(ctx, id) {
@@ -120,7 +120,7 @@ export function workerArgs(f, common) {
 }
 function prompt(state, f) {
   const role = readFileSync(join(state.workflowSource, backendRole(state.backend)), 'utf8');
-  return `${role}\nImplement only this approved assignment. Follow root and scoped AGENTS.md and docs/architecture-maintenance.md.\n${JSON.stringify(f, null, 2)}\nBaseline ${state.baseline}; dependency interfaces: ${f.interfaces}.\nOwn only the assigned paths. Do not edit other paths; report needed changes as BLOCKED. Do not change dependencies or save formats unless specifically owned and authorized. No recursive agents or worker processes. Do not launch IWSDK/browser/XR sessions. No push, PR, resets, cleanup, or merge to dev. Run applicable typecheck, tests, generator report for content, build. Commit your changes on the assigned branch. Report exact checks, limitations, runtime acceptance steps, and commit hash. If sandbox/network blocks work, report BLOCKED; never escalate. Leave unfinished work intact.\n`;
+  return `${role}\nImplement only this approved assignment. Follow root and scoped AGENTS.md and inspect the actual project architecture.\n${JSON.stringify(f, null, 2)}\nBaseline ${state.baseline}; dependency interfaces: ${f.interfaces}.\nOwn only the assigned paths. Do not edit other paths; report needed changes as BLOCKED. Do not change dependencies or save formats unless specifically owned and authorized. No recursive agents or worker processes. Do not launch IWSDK/browser/XR sessions. No push, PR, resets, cleanup, or merge to the base branch. Run only the checks actually available in this project. Commit your changes on the assigned branch. Report exact checks, limitations, runtime acceptance steps, and commit hash. If sandbox/network blocks work, report BLOCKED; never escalate. Leave unfinished work intact.\n`;
 }
 async function worker(specPath) {
   const { state, feature: f, common } = json(specPath);
@@ -247,7 +247,11 @@ function integration(state) {
     catch (e) { i.status = 'conflict'; i.error = e.message; fail(`Conflict preserved in ${i.worktree}; resolve deliberately, commit, rerun integrate`); }
   }
   i.status = 'validating'; i.checks = []; save(state);
-  const commands = [['ci'], ['run', 'typecheck'], ['test'], ['run', 'generator:report'], ['run', 'build']];
+  const scripts = json(join(i.worktree, 'package.json')).scripts ?? {};
+  const commands = [];
+  if (existsSync(join(i.worktree, 'package-lock.json'))) commands.push(['ci']);
+  for (const name of ['typecheck', 'test', 'generator:report', 'build']) if (scripts[name]) commands.push(name === 'test' ? ['test'] : ['run', name]);
+  if (!commands.length) fail('No project validation commands available; configure checks before integration');
   for (const args of commands) {
     const logPath = join(state.directory, `integration-${args.join('-').replaceAll(':', '-')}.log`);
     const fd = openSync(logPath, 'w');
@@ -266,8 +270,8 @@ function publish(state) {
   const body = join(state.directory, 'pr.md');
   writeFileSync(body, `Batch ${state.id}\n\n${state.features.map(f => `- ${f.description}`).join('\n')}\n\nValidation\n${i.checks.map(c => `- ${c.command}: passed`).join('\n')}\n\nRuntime: ${r.runtime}\nPhysical Quest: ${r.physicalQuest ?? 'not tested'}\n\nArchitecture review: ${r.architecture}\n`);
   git(i.worktree, 'push', '-u', 'origin', i.branch);
-  const existing = run('gh', ['pr', 'list', '--head', i.branch, '--base', 'dev', '--json', 'url'], i.worktree);
-  state.pr = JSON.parse(existing)[0]?.url ?? run('gh', ['pr', 'create', '--base', 'dev', '--head', i.branch, '--title', `Feature batch: ${state.id}`, '--body-file', body], i.worktree);
+  const existing = run('gh', ['pr', 'list', '--head', i.branch, '--base', state.baseBranch, '--json', 'url'], i.worktree);
+  state.pr = JSON.parse(existing)[0]?.url ?? run('gh', ['pr', 'create', '--base', state.baseBranch, '--head', i.branch, '--title', `Feature batch: ${state.id}`, '--body-file', body], i.worktree);
   console.log(state.pr);
 }
 function cleanup(state) {
@@ -302,9 +306,12 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
     const directory = join(ctx.root, 'batches', batch.id);
     mkdirSync(join(ctx.root, 'batches'), { recursive: true });
     try { mkdirSync(directory); } catch (error) { if (error.code === 'EEXIST') fail('Batch already exists; choose a new id'); throw error; }
-    const baseline = git(ctx.repo, 'rev-parse', '--verify', 'refs/heads/dev^{commit}');
-    // Use committed dev regardless of dirty current checkout; no checkout/reset/stash.
-    const state = { ...batch, version: 1, baseline, repo: ctx.repo, root: ctx.root, directory, workflowSource: ctx.repo, worktreeRoot: ctx.worktreeRoot, createdAt: new Date().toISOString() };
+    const config = existsSync(join(ctx.repo, 'iwsdk-agent-kit.config.json')) ? json(join(ctx.repo, 'iwsdk-agent-kit.config.json')) : {};
+    const baseBranch = requested.baseBranch ?? config.baseBranch ?? 'main';
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(baseBranch) || baseBranch.includes('..')) fail('Invalid base branch');
+    const baseline = git(ctx.repo, 'rev-parse', '--verify', `refs/heads/${baseBranch}^{commit}`);
+    // Use the committed baseline without modifying the original checkout.
+    const state = { ...batch, baseBranch, version: 1, baseline, repo: ctx.repo, root: ctx.root, directory, workflowSource: ctx.repo, worktreeRoot: ctx.worktreeRoot, createdAt: new Date().toISOString() };
     state.features = batch.features.map(f => ({ ...f, ...paths(ctx.worktreeRoot, batch.id, f.id), status: 'pending' }));
     save(state); console.log(JSON.stringify(state, null, 2)); return;
   }
