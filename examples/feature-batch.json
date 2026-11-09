@@ -1,0 +1,36 @@
+{
+  "id": "example-batch",
+  "maxConcurrency": 2,
+  "features": [
+    {
+      "id": "pickup",
+      "description": "Implement a basic IWSDK collectible using the project's existing interaction system",
+      "owns": [
+        "src/features/pickup/"
+      ],
+      "acceptance": [
+        "Player can collect an item",
+        "Collected state resets on restart"
+      ],
+      "interfaces": "No shared interface changes without coordinator review",
+      "contentChanges": false,
+      "runtimeRequired": true,
+      "dependsOn": []
+    },
+    {
+      "id": "settings",
+      "description": "Add an independent settings panel using existing UI conventions",
+      "owns": [
+        "src/features/settings/"
+      ],
+      "acceptance": [
+        "Settings can be opened and closed",
+        "Preferences persist according to project conventions"
+      ],
+      "interfaces": "No shared interface changes without coordinator review",
+      "contentChanges": false,
+      "runtimeRequired": true,
+      "dependsOn": []
+    }
+  ]
+}
