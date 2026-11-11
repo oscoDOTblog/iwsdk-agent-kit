@@ -2,6 +2,8 @@
 
 This file is the **human-reviewed, version-controlled project memory** for Codex,
 Claude Code, OpenCode and Muse Code. All harnesses must read it before changing code.
+Provider selection is controlled by `iwsdk-agent-kit.config.json`, **not** this
+context file. Never use a historical statement here to select a paid CLI.
 
 > Keep this short, factual, and safe to commit. Do not store credentials, private
 > transcripts, personal data, or unverified claims. Update it between feature
