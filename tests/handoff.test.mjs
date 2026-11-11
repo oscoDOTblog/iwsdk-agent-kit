@@ -42,6 +42,7 @@ test('installer adds shared context and Muse while backing up changed managed fi
   install(dir);
   assert.ok(existsSync(join(dir, '.agents/agents/feature-engineer.md')));
   assert.ok(existsSync(join(dir, 'scripts/handoff.mjs')));
+  assert.ok(existsSync(join(dir, 'scripts/provider-policy.mjs')));
   assert.match(readFileSync(join(dir, 'AGENT_CONTEXT.md'), 'utf8'), /Shared Agent Context/);
   assert.match(readFileSync(join(dir, 'AGENTS.md'), 'utf8'), /My own rules/);
   assert.match(readFileSync(join(dir, 'AGENTS.md'), 'utf8'), /AGENT_CONTEXT.md/);
@@ -87,7 +88,7 @@ test('failed feature can be handed to Muse without losing its task checkpoint', 
   state.features[0].error = 'codex exited 1 (possible-usage-limit)';
   writeFileSync(statePath, JSON.stringify(state, null, 2));
   await assert.rejects(main(['handoff', 'handoff-demo', 'first', '--backend', 'muse'], dir), /Explicit authorization/);
-  await main(['handoff', 'handoff-demo', 'first', '--backend', 'muse', '--approve'], dir);
+  await main(['handoff', 'handoff-demo', 'first', '--backend', 'muse', '--allow-cross-provider', 'muse', '--approve'], dir);
   const updated = JSON.parse(readFileSync(statePath, 'utf8'));
   assert.equal(updated.features[0].status, 'pending');
   assert.equal(updated.features[0].backend, 'muse');
@@ -120,7 +121,7 @@ test('handoff refuses dirty partial work without deleting it', async () => {
   state.features[0].error = 'usage limit';
   writeFileSync(statePath, JSON.stringify(state, null, 2));
   await assert.rejects(
-    main(['handoff', 'dirty-batch', 'first', '--backend', 'muse', '--approve'], dir),
+    main(['handoff', 'dirty-batch', 'first', '--backend', 'muse', '--allow-cross-provider', 'muse', '--approve'], dir),
     /Uncommitted work preserved/
   );
   assert.ok(existsSync(partial));
