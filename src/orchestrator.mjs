@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { backendName, backendRole, workerInvocation, parseWorkerResult, preflightFor, workerEnvironment } from './backends.mjs';
 import { handoffContext, sharedContext, writeHandoff, classifyFailure } from './handoff.mjs';
+import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
 
 const self = fileURLToPath(import.meta.url);
 const fail = message => { throw new Error(message); };
@@ -55,6 +56,7 @@ export function parseBatch(input) {
     if (f.owns.some(p => p.startsWith('/') || p.includes('..') || p.includes('\\') || p.includes('*') || p.startsWith('.git'))) fail('Ownership must be relative exact files or directory/ prefixes');
     if (typeof f.interfaces !== 'string' || !f.interfaces.trim()) fail(`${f.id}: coordinator must settle interfaces (or state none)`);
     if (typeof f.contentChanges !== 'boolean' || typeof f.runtimeRequired !== 'boolean') fail(`${f.id}: contentChanges/runtimeRequired must be booleans`);
+    if (f.backend !== undefined) f.backend = backendName(f.backend);
     f.dependsOn ??= [];
     if (!Array.isArray(f.dependsOn) || !f.dependsOn.every(validId)) fail('dependsOn must list feature ids');
   }
@@ -147,7 +149,11 @@ Leave unfinished work intact.
 }
 
 async function worker(specPath) {
-  const { state, feature: f, common } = json(specPath);
+  const { state, feature: f, common, providerAuthorization } = json(specPath);
+  const workerBackend = backendName(f.backend ?? state.backend);
+  if (!providerAuthorization?.requested?.includes(workerBackend)) {
+    fail('Missing provider authorization from coordinator start; refusing to launch a model worker');
+  }
   // Exclusive claim closes the spawn/PID-persistence crash window. Retry cancels unclaimed attempts.
   let claim;
   try { claim = openSync(join(f.attemptDirectory, 'claim.json'), 'wx'); } catch { return; }
@@ -195,7 +201,14 @@ function createFeature(state, f) {
   }
   f.startHead ??= git(f.worktree, 'rev-parse', 'HEAD');
 }
-async function start(ctx, state) {
+async function start(ctx, state, flags) {
+  // Recheck on EVERY start, even for batches planned before provider isolation existed.
+  // This must run before preflight, npm ci, worktree creation, or any model CLI.
+  const policy = readProviderPolicy(ctx.repo);
+  const activeBackends = state.features.filter(f => ['pending', 'running'].includes(f.status))
+    .map(f => backendName(f.backend ?? state.backend));
+  const providerAuthorization = enforceProviderIsolation(policy, activeBackends, flags, 'start');
+  state.lastProviderAuthorization = { ...providerAuthorization, at: new Date().toISOString() };
   if (process.platform === 'win32') fail('Worker process-group recovery requires POSIX; use Linux, macOS or WSL');
   // Check the chosen CLI before spending model credits; Codex also checks its sandbox.
   try {
@@ -224,7 +237,7 @@ async function start(ctx, state) {
         f.attemptDirectory = join(state.directory, f.id, String(f.attempt));
         mkdirSync(f.attemptDirectory, { recursive: true });
         const specPath = join(f.attemptDirectory, 'spec.json');
-        atomic(specPath, { state, feature: f, common: ctx.common });
+        atomic(specPath, { state, feature: f, common: ctx.common, providerAuthorization });
         // Persist launching intent first. A crash here is interrupted, never automatically duplicated.
         f.status = 'running'; f.pid = process.pid; save(state);
         const child = spawn(process.execPath, [self, '_worker', specPath], { detached: true, stdio: 'ignore' });
@@ -331,13 +344,18 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
   const ctx = context(cwd);
   if (command === 'plan') {
     const requested = json(resolve(cwd, id));
-    const batch = parseBatch(requested);
+    const policy = readProviderPolicy(ctx.repo);
+    // A missing batch backend inherits the configured provider, not a hard-coded
+    // Codex default. Explicit batch/feature overrides are checked below.
+    const batch = parseBatch({ ...requested, backend: requested.backend ?? policy.configuredBackend });
     const selected = flags.indexOf('--backend');
     if (selected >= 0) {
       const cliBackend = backendName(flags[selected + 1]);
       if (requested.backend !== undefined && requested.backend !== cliBackend) fail('Batch backend conflicts with --backend');
       batch.backend = cliBackend;
     }
+    const providerAuthorization = enforceProviderIsolation(policy,
+      batch.features.map(f => f.backend ?? batch.backend), flags, 'plan');
     const directory = join(ctx.root, 'batches', batch.id);
     mkdirSync(join(ctx.root, 'batches'), { recursive: true });
     try { mkdirSync(directory); } catch (error) { if (error.code === 'EEXIST') fail('Batch already exists; choose a new id'); throw error; }
@@ -346,7 +364,8 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(baseBranch) || baseBranch.includes('..')) fail('Invalid base branch');
     const baseline = git(ctx.repo, 'rev-parse', '--verify', `refs/heads/${baseBranch}^{commit}`);
     // Use the committed baseline without modifying the original checkout.
-    const state = { ...batch, baseBranch, version: 1, baseline, repo: ctx.repo, root: ctx.root, directory, workflowSource: ctx.repo, worktreeRoot: ctx.worktreeRoot, createdAt: new Date().toISOString() };
+    const state = { ...batch, baseBranch, version: 1, baseline, repo: ctx.repo, root: ctx.root, directory, workflowSource: ctx.repo, worktreeRoot: ctx.worktreeRoot, createdAt: new Date().toISOString(),
+      plannedProviderAuthorization: { ...providerAuthorization, at: new Date().toISOString() } };
     state.features = batch.features.map(f => ({ ...f, ...paths(ctx.worktreeRoot, batch.id, f.id), status: 'pending' }));
     save(state); console.log(JSON.stringify(state, null, 2)); return;
   }
@@ -355,7 +374,7 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
   if (command === 'status') { refresh(state); console.log(JSON.stringify(state, null, 2)); return; }
   await locked(state, async () => {
     switch (command) {
-      case 'start': approved(flags); await start(ctx, state); break;
+      case 'start': approved(flags); await start(ctx, state, flags); break;
       case 'collect': collect(state); break;
       case 'integrate': approved(flags); integration(state); break;
       case 'publish': approved(flags); publish(state); break;
@@ -374,6 +393,8 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
         const newBackendAt = flags.indexOf('--backend');
         if (command === 'handoff' && newBackendAt < 0) fail('Handoff requires --backend codex|claude|opencode|muse');
         const nextBackend = newBackendAt >= 0 ? backendName(flags[newBackendAt + 1]) : (f.backend ?? state.backend);
+        const policy = readProviderPolicy(ctx.repo);
+        const providerAuthorization = enforceProviderIsolation(policy, [nextBackend], flags, command);
         const checkpoint = writeHandoff(state, f);
         console.log('Saved checkpoint: ' + checkpoint);
         if (f.attemptDirectory && existsSync(join(f.attemptDirectory, 'claim.json')) && alive(json(join(f.attemptDirectory, 'claim.json')).pid)) fail('Worker claim still alive');
@@ -386,11 +407,11 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
         if (newBackendAt >= 0) {
           f.backend = nextBackend;
           f.handoffs ??= [];
-          f.handoffs.push({ from: previous, to: nextBackend, at: new Date().toISOString(), checkpoint });
+          f.handoffs.push({ from: previous, to: nextBackend, at: new Date().toISOString(), checkpoint, providerAuthorization });
         }
         f.status = 'pending'; delete f.error; break;
       }
-      default: fail('Commands: plan FILE | start/status/collect/integrate/publish/cleanup ID | checkpoint ID [FEATURE] | handoff ID FEATURE --backend muse --approve | retry ID FEATURE --approve');
+      default: fail('Commands: plan FILE [--backend codex] | start ID --approve | handoff ID FEATURE --backend muse --approve | retry ID FEATURE --approve | checkpoint ID [FEATURE] | collect/integrate/publish/cleanup ID. Cross-provider: add --allow-cross-provider BACKEND --approve to plan, start and handoff.');
     }
   });
 }
