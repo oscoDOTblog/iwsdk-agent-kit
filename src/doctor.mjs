@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { readProviderPolicy } from './provider-policy.mjs';
 const read = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 export function inspectProject(root = process.cwd()) {
   const pkg = read(join(root, 'package.json')) ?? {};
@@ -12,7 +13,8 @@ export function inspectProject(root = process.cwd()) {
     root, git: git.status === 0 ? git.stdout.trim() : null,
     node: process.version, language: existsSync(join(root, 'tsconfig.json')) ? 'TypeScript' : 'unknown',
     sdk, scripts: pkg.scripts ?? {}, manifest: manifest ?? 'not found',
+    providerPolicy: readProviderPolicy(root),
     capabilities: manifest?.world?.features ?? 'unknown',
-    notes: ['IWSDK capabilities are detected, not modified', 'Unknown settings require manual verification'],
+    notes: ['IWSDK capabilities are detected, not modified', 'Unknown settings require manual verification', 'Provider isolation is strict; active coordinator detection is best-effort and project backend is the fallback'],
   };
 }
