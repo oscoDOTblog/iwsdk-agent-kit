@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectProject } from './doctor.mjs';
 const kitRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -8,7 +9,9 @@ const managedEnd = '<!-- iwsdk-agent-kit:end -->';
 const guidance = `Use the IWSDK project's installed SDK version and inspect its config before implementing features.
 Follow existing architecture; never assume grabbing, locomotion or physics is enabled.
 For independent features, plan isolated Git worktrees through the installed agent runner.
-One batch uses one selected CLI: codex, claude or opencode.
+One batch defaults to one CLI: codex, claude, opencode or muse. A stopped feature can switch via a reviewed handoff.
+Read AGENT_CONTEXT.md before work and the coordinator's task checkpoint when resuming.
+Only the coordinator updates AGENT_CONTEXT.md between batches; workers must not race to edit it.
 Keep shared XR/browser/headset sessions exclusive to one worker.
 Do not invent SDK APIs, overwrite unrelated work, or claim unexecuted tests.
 Do not push, merge or deploy without explicit approval.`;
@@ -31,20 +34,39 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
       if (previous === content) { actions.push({path,action:'unchanged'}); return; }
       if (mode === 'new-only') { actions.push({path,action:'conflict',reason:'Existing unmanaged file preserved'}); return; }
     }
+    if (existsSync(path) && mode === 'managed') {
+      const previous = readFileSync(path, 'utf8');
+      const hash = createHash('sha256').update(previous).digest('hex').slice(0, 12);
+      const backup = join(root, '.iwsdk-agent-kit-backups', relative(root, path) + '.' + hash + '.bak');
+      actions.push({path,action:'backup',backup});
+      if (!dryRun && !existsSync(backup)) {
+        mkdirSync(dirname(backup), {recursive:true});
+        writeFileSync(backup, previous);
+      }
+    }
     actions.push({path,action:existsSync(path)?'update':'create'});
     if (!dryRun) { mkdirSync(dirname(path), {recursive:true}); writeFileSync(path,content); }
   };
   for (const [from,to] of [
     ['src/orchestrator.mjs','scripts/agents.mjs'],
     ['src/backends.mjs','scripts/backends.mjs'],
+    ['src/handoff.mjs','scripts/handoff.mjs'],
     ['templates/.codex/agents/feature_engineer.toml','.codex/agents/feature_engineer.toml'],
     ['templates/.claude/agents/feature-engineer.md','.claude/agents/feature-engineer.md'],
-    ['templates/.opencode/agents/feature-engineer.md','.opencode/agents/feature-engineer.md']
+    ['templates/.opencode/agents/feature-engineer.md','.opencode/agents/feature-engineer.md'],
+    ['templates/.agents/agents/feature-engineer.md','.agents/agents/feature-engineer.md']
   ]) {
     const dest = join(root,to), source = join(kitRoot,from);
     const text = readFileSync(source,'utf8').replace("'./backends.mjs'","'./backends.mjs'");
     // Never overwrite preexisting user agent files.
     write(dest,text,to.startsWith('scripts/')?'managed':'new-only');
+  }
+  const contextPath = join(root, 'AGENT_CONTEXT.md');
+  write(contextPath, readFileSync(join(kitRoot, 'templates/AGENT_CONTEXT.md'), 'utf8'), 'new-only');
+  const ignorePath = join(root, '.gitignore');
+  const ignore = existsSync(ignorePath) ? readFileSync(ignorePath, 'utf8') : '';
+  if (!ignore.split(/\r?\n/).includes('.iwsdk-agent-kit-backups/')) {
+    write(ignorePath, ignore.trimEnd() + (ignore.trim() ? '\n' : '') + '.iwsdk-agent-kit-backups/\n');
   }
   for (const name of ['AGENTS.md','CLAUDE.md']) {
     const path=join(root,name);
@@ -59,7 +81,7 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
   })() : 'main';
   const config=join(root,'iwsdk-agent-kit.config.json');
   write(config,JSON.stringify({version:1,baseBranch:base,backend:'codex',maxConcurrency:2,detectedSDK:detected.sdk},null,2)+'\n','new-only');
-  const scripts={plan:'node scripts/agents.mjs plan',start:'node scripts/agents.mjs start',status:'node scripts/agents.mjs status',collect:'node scripts/agents.mjs collect',integrate:'node scripts/agents.mjs integrate',publish:'node scripts/agents.mjs publish',cleanup:'node scripts/agents.mjs cleanup'};
+  const scripts={plan:'node scripts/agents.mjs plan',start:'node scripts/agents.mjs start',status:'node scripts/agents.mjs status',checkpoint:'node scripts/agents.mjs checkpoint',handoff:'node scripts/agents.mjs handoff',retry:'node scripts/agents.mjs retry',collect:'node scripts/agents.mjs collect',integrate:'node scripts/agents.mjs integrate',publish:'node scripts/agents.mjs publish',cleanup:'node scripts/agents.mjs cleanup'};
   pkg.scripts ??= {};
   for(const [key,value] of Object.entries(scripts)) {
     const name='agents:'+key;
