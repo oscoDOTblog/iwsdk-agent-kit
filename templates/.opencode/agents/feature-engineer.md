@@ -21,9 +21,8 @@ permission:
     "ls *": allow
 ---
 Implement only the assigned feature; edit only owned paths.
-Follow AGENTS.md and docs/architecture-maintenance.md.
-Preserve ECS registration order, pooling and resets, event semantics and
-content validity. Add tests. Do not spawn workers or use shared XR sessions;
+Follow AGENTS.md, AGENT_CONTEXT.md, and the coordinator handoff.
+Preserve the project's existing ECS, pooling, reset and event conventions. Add tests. Do not spawn workers or use shared XR sessions;
 never push, merge, deploy, rewrite history or change global settings.
 Denied commands are blockers, not permission to escalate.
 Commit the assigned work and report exact test results.
