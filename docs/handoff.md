@@ -1,8 +1,9 @@
 # Cross-harness context and safe handoff
 
 IWSDK Agent Kit supports **Codex, Claude Code, OpenCode, and Meta Muse Code**.
-Each feature batch selects a default backend; a stopped feature can be explicitly
-handed to a different backend. The kit does **not** automatically rerun a task
+The configured backend in `iwsdk-agent-kit.config.json` is the default and
+is enforced at plan, start, retry and handoff. A stopped feature can be
+explicitly handed to a different backend using a named, per-command override. The kit does **not** automatically rerun a task
 when a provider reaches its quota.
 
 ## Install / upgrade in an existing project
@@ -86,14 +87,16 @@ is advisory; log text is not proof of a specific provider limit.
 3. Reassign the stopped feature to an installed/authenticated backend:
 
 ```bash
-npm run agents:handoff -- example-batch pickup --backend muse --approve
-npm run agents:start -- example-batch --approve
+npm run agents:handoff -- example-batch pickup --backend muse --allow-cross-provider muse --approve
+npm run agents:start -- example-batch --allow-cross-provider muse --approve
 ```
 
 Other targets: `codex`, `claude`, `opencode`. The next worker gets the
 same assignment, shared project context, and the previous checkpoint.
 The coordinator refuses a handoff while the worker is still alive or its
-worktree is dirty. It does not duplicate a running agent or automatically
+worktree is dirty. Provider isolation also blocks an unauthorized cross-provider
+handoff and blocks `start` if the override is omitted. See
+[provider isolation](provider-isolation.md) for config and examples. It does not duplicate a running agent or automatically
 increase spend on another provider.
 
 **Why not auto-failover by default?** CLI quota messages and exit codes differ;
