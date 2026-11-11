@@ -6,7 +6,7 @@ import { resolve, join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { backendName, backendRole, workerInvocation, parseWorkerResult, preflightFor, workerEnvironment } from './backends.mjs';
-import { handoffPath, handoffContext, sharedContext, writeHandoff } from './handoff.mjs';
+import { handoffContext, sharedContext, writeHandoff, classifyFailure } from './handoff.mjs';
 
 const self = fileURLToPath(import.meta.url);
 const fail = message => { throw new Error(message); };
@@ -168,7 +168,10 @@ async function worker(specPath) {
       child.stdin.on('error', () => {}); child.stdin.end(invocation.stdin ?? '');
     });
     const summary = join(f.attemptDirectory, 'summary.md');
-    if (code !== 0) fail(`${backend} exited ${code}; permission/network errors require coordinator review`);
+    if (code !== 0) {
+      const hint = classifyFailure(readFileSync(join(f.attemptDirectory, 'worker.jsonl'), 'utf8'));
+      fail(`${backend} exited ${code} (${hint}); inspect worker log and preserve partial work`);
+    }
     if (backend !== 'codex') writeFileSync(summary, parseWorkerResult(backend, readFileSync(join(f.attemptDirectory, 'worker.jsonl'), 'utf8')));
     if (!existsSync(summary) || /\bBLOCKED\b/.test(readFileSync(summary, 'utf8'))) fail('Worker missing summary or reported BLOCKED');
     const head = git(f.worktree, 'rev-parse', 'HEAD');
@@ -205,8 +208,13 @@ async function start(ctx, state) {
     state.preflight = { passed: false, error: e.message, checkedAt: new Date().toISOString() };
     fail(`Worker preflight blocked before inference: ${e.message}`);
   }
+  let lastCheckpoint = 0;
   for (;;) {
     refresh(state);
+    if (Date.now() - lastCheckpoint >= 60000) {
+      for (const f of state.features.filter(f => f.status === 'running')) writeHandoff(state, f);
+      lastCheckpoint = Date.now();
+    }
     let running = state.features.filter(f => f.status === 'running').length;
     for (const f of ready(state)) {
       if (running >= state.maxConcurrency) break;
