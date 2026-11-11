@@ -9,7 +9,12 @@ const managedEnd = '<!-- iwsdk-agent-kit:end -->';
 const guidance = `Use the IWSDK project's installed SDK version and inspect its config before implementing features.
 Follow existing architecture; never assume grabbing, locomotion or physics is enabled.
 For independent features, plan isolated Git worktrees through the installed agent runner.
-One batch defaults to one CLI: codex, claude, opencode or muse. A stopped feature can switch via a reviewed handoff.
+Provider isolation is strict by default: use the backend in iwsdk-agent-kit.config.json
+for feature workers. If the active coordinator is detected, it must also match.
+Never silently invoke another provider CLI, including from a Codex or Claude session.
+Cross-provider plan/start/handoff needs user authorization naming the target provider
+and explicit --allow-cross-provider BACKEND --approve on EACH affected command.
+Do not add these flags without the user's approval. A worker must not start other agents.
 Read AGENT_CONTEXT.md before work and the coordinator's task checkpoint when resuming.
 Only the coordinator updates AGENT_CONTEXT.md between batches; workers must not race to edit it.
 Keep shared XR/browser/headset sessions exclusive to one worker.
@@ -51,6 +56,7 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
     ['src/orchestrator.mjs','scripts/agents.mjs'],
     ['src/backends.mjs','scripts/backends.mjs'],
     ['src/handoff.mjs','scripts/handoff.mjs'],
+    ['src/provider-policy.mjs','scripts/provider-policy.mjs'],
     ['templates/.codex/agents/feature_engineer.toml','.codex/agents/feature_engineer.toml'],
     ['templates/.claude/agents/feature-engineer.md','.claude/agents/feature-engineer.md'],
     ['templates/.opencode/agents/feature-engineer.md','.opencode/agents/feature-engineer.md'],
@@ -80,7 +86,7 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
     return 'main';
   })() : 'main';
   const config=join(root,'iwsdk-agent-kit.config.json');
-  write(config,JSON.stringify({version:1,baseBranch:base,backend:'codex',maxConcurrency:2,detectedSDK:detected.sdk},null,2)+'\n','new-only');
+  write(config,JSON.stringify({version:2,baseBranch:base,backend:'codex',providerIsolation:'strict',maxConcurrency:2,detectedSDK:detected.sdk},null,2)+'\n','new-only');
   const scripts={plan:'node scripts/agents.mjs plan',start:'node scripts/agents.mjs start',status:'node scripts/agents.mjs status',checkpoint:'node scripts/agents.mjs checkpoint',handoff:'node scripts/agents.mjs handoff',retry:'node scripts/agents.mjs retry',collect:'node scripts/agents.mjs collect',integrate:'node scripts/agents.mjs integrate',publish:'node scripts/agents.mjs publish',cleanup:'node scripts/agents.mjs cleanup'};
   pkg.scripts ??= {};
   for(const [key,value] of Object.entries(scripts)) {
