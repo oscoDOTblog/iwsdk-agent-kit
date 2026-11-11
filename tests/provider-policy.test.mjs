@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { detectCoordinator, readProviderPolicy, enforceProviderIsolation } from '../src/provider-policy.mjs';
 import { main } from '../src/orchestrator.mjs';
+import { install } from '../src/install.mjs';
 
 function git(cwd, ...args) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -152,4 +153,19 @@ test('changing configured provider after plan also blocks an old pending batch',
       '{"backend":"claude","providerIsolation":"strict","baseBranch":"main"}');
     await assert.rejects(main(['start', 'provider-test', '--approve'], dir),
       /Provider isolation blocked start/);
+  }));
+
+test('installed project runner also blocks an unauthorized Claude subprocess', () =>
+  noCoordinatorEnv(async () => {
+    const dir = createRepo('codex');
+    install(dir);
+    const child = spawnSync(process.execPath,
+      ['scripts/agents.mjs', 'plan', 'features.json', '--backend', 'claude'],
+      { cwd: dir, encoding: 'utf8', env: {
+        ...process.env,
+        IWSDK_AGENT_COORDINATOR: 'codex',
+      } });
+    assert.notEqual(child.status, 0);
+    assert.match(child.stderr, /Provider isolation blocked plan/);
+    assert.equal(existsSync(statePath(dir)), false);
   }));
