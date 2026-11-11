@@ -6,6 +6,7 @@ import { resolve, join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { backendName, backendRole, workerInvocation, parseWorkerResult, preflightFor, workerEnvironment } from './backends.mjs';
+import { handoffPath, handoffContext, sharedContext, writeHandoff } from './handoff.mjs';
 
 const self = fileURLToPath(import.meta.url);
 const fail = message => { throw new Error(message); };
@@ -97,8 +98,11 @@ function load(ctx, id) {
 function refresh(state) {
   for (const f of state.features) if (f.status === 'running') {
     const receipt = join(f.attemptDirectory, 'receipt.json');
-    if (existsSync(receipt)) Object.assign(f, json(receipt));
-    else if (!attemptAlive(f)) { f.status = 'interrupted'; f.error = 'Worker exited without receipt; inspect worktree/log before explicit retry'; }
+    if (existsSync(receipt)) { Object.assign(f, json(receipt)); writeHandoff(state, f); }
+    else if (!attemptAlive(f)) {
+      f.status = 'interrupted'; f.error = 'Worker exited without receipt; inspect worktree/log before explicit retry';
+      writeHandoff(state, f);
+    }
   }
 }
 async function locked(state, fn) {
@@ -119,9 +123,29 @@ export function workerArgs(f, common) {
   return ['exec', '--strict-config', '--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'agents.enabled=false', '--add-dir', common, '--cd', f.worktree, '--json', '--output-last-message', join(f.attemptDirectory, 'summary.md'), '-'];
 }
 function prompt(state, f) {
-  const role = readFileSync(join(state.workflowSource, backendRole(state.backend)), 'utf8');
-  return `${role}\nImplement only this approved assignment. Follow root and scoped AGENTS.md and inspect the actual project architecture.\n${JSON.stringify(f, null, 2)}\nBaseline ${state.baseline}; dependency interfaces: ${f.interfaces}.\nOwn only the assigned paths. Do not edit other paths; report needed changes as BLOCKED. Do not change dependencies or save formats unless specifically owned and authorized. No recursive agents or worker processes. Do not launch IWSDK/browser/XR sessions. No push, PR, resets, cleanup, or merge to the base branch. Run only the checks actually available in this project. Commit your changes on the assigned branch. Report exact checks, limitations, runtime acceptance steps, and commit hash. If sandbox/network blocks work, report BLOCKED; never escalate. Leave unfinished work intact.\n`;
+  const backend = backendName(f.backend ?? state.backend);
+  const role = readFileSync(join(state.workflowSource, backendRole(backend)), 'utf8');
+  const context = sharedContext(state);
+  const checkpoint = handoffContext(state, f);
+  return `${role}\nImplement only this approved assignment. Follow root and scoped AGENTS.md and inspect the actual project architecture.
+Shared project context (coordinator-owned, do not edit from this feature worker):
+${context}
+Previous checkpoint (review before resuming; may describe incomplete or unverified work):
+${checkpoint || '(first attempt; no previous checkpoint)'}
+Assignment:
+${JSON.stringify(f, null, 2)}
+Baseline ${state.baseline}; dependency interfaces: ${f.interfaces}.
+Own only assigned paths. Do not edit other paths; report needed changes as BLOCKED.
+Preserve partial work from previous attempts. Do not change dependencies or save formats
+unless specifically owned and authorized. No recursive agents or worker processes.
+Do not launch IWSDK/browser/XR sessions. No push, PR, resets, cleanup or merge to the base branch.
+Run only checks actually available in this project. Commit changes on the assigned branch.
+Report exact checks, limitations, runtime acceptance steps and commit hash.
+If sandbox/network/usage limits block work, report BLOCKED; never escalate.
+Leave unfinished work intact.
+`;
 }
+
 async function worker(specPath) {
   const { state, feature: f, common } = json(specPath);
   // Exclusive claim closes the spawn/PID-persistence crash window. Retry cancels unclaimed attempts.
@@ -135,7 +159,7 @@ async function worker(specPath) {
     const installLog = openSync(join(f.attemptDirectory, 'install.log'), 'w');
     const install = spawnSync('npm', ['ci', '--no-audit', '--no-fund'], { cwd: f.worktree, stdio: ['ignore', installLog, installLog] }); closeSync(installLog);
     if (install.status !== 0) fail(`npm ci failed (${install.status}); see worker log`);
-    const backend = backendName(state.backend);
+    const backend = backendName(f.backend ?? state.backend);
     const invocation = workerInvocation(backend, f, common, prompt(state, f));
     const code = await new Promise((resolveCode, reject) => {
       const child = spawn(invocation.command, invocation.args, { cwd: f.worktree, stdio: ['pipe', log, log], env: { ...workerEnvironment(backend), AGENT_WORKER_SPEC: specPath } });
@@ -172,7 +196,10 @@ async function start(ctx, state) {
   if (process.platform === 'win32') fail('Worker process-group recovery requires POSIX; use Linux, macOS or WSL');
   // Check the chosen CLI before spending model credits; Codex also checks its sandbox.
   try {
-    for (const check of preflightFor(state.backend)) run(check.command, check.args, state.workflowSource, { env: workerEnvironment(state.backend) });
+    const backends = [...new Set(state.features.filter(f => f.status === 'pending').map(f => backendName(f.backend ?? state.backend)))];
+    for (const backend of backends) for (const check of preflightFor(backend)) {
+      run(check.command, check.args, state.workflowSource, { env: workerEnvironment(backend) });
+    }
     state.preflight = { passed: true, checkedAt: new Date().toISOString() };
   } catch (e) {
     state.preflight = { passed: false, error: e.message, checkedAt: new Date().toISOString() };
@@ -325,18 +352,37 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
       case 'integrate': approved(flags); integration(state); break;
       case 'publish': approved(flags); publish(state); break;
       case 'cleanup': approved(flags); cleanup(state); break;
+      case 'checkpoint': {
+        const targets = flags[0] ? state.features.filter(f => f.id === flags[0]) : state.features;
+        if (!targets.length) fail('Unknown feature for checkpoint');
+        for (const f of targets) console.log(writeHandoff(state, f));
+        break;
+      }
+      case 'handoff':
       case 'retry': {
-        approved(flags); const f = state.features.find(x => x.id === flags[0]);
+        approved(flags);
+        const f = state.features.find(x => x.id === flags[0]);
         if (!f || !['failed', 'blocked', 'interrupted'].includes(f.status) || attemptAlive(f)) fail('Only stopped failed/blocked/interrupted workers may be retried');
+        const newBackendAt = flags.indexOf('--backend');
+        if (command === 'handoff' && newBackendAt < 0) fail('Handoff requires --backend codex|claude|opencode|muse');
+        const nextBackend = newBackendAt >= 0 ? backendName(flags[newBackendAt + 1]) : (f.backend ?? state.backend);
+        const checkpoint = writeHandoff(state, f);
+        console.log('Saved checkpoint: ' + checkpoint);
         if (f.attemptDirectory && existsSync(join(f.attemptDirectory, 'claim.json')) && alive(json(join(f.attemptDirectory, 'claim.json')).pid)) fail('Worker claim still alive');
         if (f.attemptDirectory && !existsSync(join(f.attemptDirectory, 'claim.json'))) {
           const fd = openSync(join(f.attemptDirectory, 'claim.json'), 'wx'); writeFileSync(fd, JSON.stringify({ canceled: true })); closeSync(fd);
         }
         if (f.attemptDirectory && existsSync(join(f.attemptDirectory, 'child.json')) && alive(json(join(f.attemptDirectory, 'child.json')).pid)) fail('Worker child still running');
-        if (existsSync(f.worktree) && !clean(f.worktree)) fail('Inspect and commit unfinished work before retry');
+        if (existsSync(f.worktree) && !clean(f.worktree)) fail('Uncommitted work preserved. Inspect the worktree, commit reviewed partial changes, then retry the handoff');
+        const previous = f.backend ?? state.backend;
+        if (newBackendAt >= 0) {
+          f.backend = nextBackend;
+          f.handoffs ??= [];
+          f.handoffs.push({ from: previous, to: nextBackend, at: new Date().toISOString(), checkpoint });
+        }
         f.status = 'pending'; delete f.error; break;
       }
-      default: fail('Commands: plan FILE | start/status/collect/integrate/publish/cleanup ID | retry ID FEATURE --approve');
+      default: fail('Commands: plan FILE | start/status/collect/integrate/publish/cleanup ID | checkpoint ID [FEATURE] | handoff ID FEATURE --backend muse --approve | retry ID FEATURE --approve');
     }
   });
 }
