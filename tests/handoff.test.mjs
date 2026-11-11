@@ -97,3 +97,35 @@ test('failed feature can be handed to Muse without losing its task checkpoint', 
   assert.match(checkpoint, /codex/);
   assert.match(checkpoint, /Build one independent feature/);
 });
+
+test('handoff refuses dirty partial work without deleting it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'iwsdk-dirty-handoff-'));
+  git(dir, 'init', '-b', 'main');
+  git(dir, 'config', 'user.name', 'Test User');
+  git(dir, 'config', 'user.email', 'test@example.com');
+  writeFileSync(join(dir, 'package.json'), '{"name":"sample"}\n');
+  writeFileSync(join(dir, 'features.json'), JSON.stringify({ id: 'dirty-batch', features: [feature()] }));
+  git(dir, 'add', '.');
+  git(dir, 'commit', '-m', 'initial');
+  await main(['plan', 'features.json'], dir);
+  const statePath = join(dir, '.git', 'agent-workflow', 'batches', 'dirty-batch', 'state.json');
+  const state = JSON.parse(readFileSync(statePath, 'utf8'));
+  const worktree = state.features[0].worktree;
+  mkdirSync(join(worktree, '..'), { recursive: true });
+  git(dir, 'worktree', 'add', '-b', state.features[0].branch, worktree, state.baseline);
+  mkdirSync(join(worktree, 'src', 'feature'), { recursive: true });
+  const partial = join(worktree, 'src', 'feature', 'partial.ts');
+  writeFileSync(partial, 'export const unfinished = true;\n');
+  state.features[0].status = 'failed';
+  state.features[0].error = 'usage limit';
+  writeFileSync(statePath, JSON.stringify(state, null, 2));
+  await assert.rejects(
+    main(['handoff', 'dirty-batch', 'first', '--backend', 'muse', '--approve'], dir),
+    /Uncommitted work preserved/
+  );
+  assert.ok(existsSync(partial));
+  const updated = JSON.parse(readFileSync(statePath, 'utf8'));
+  assert.equal(updated.features[0].status, 'failed');
+  assert.equal(updated.features[0].backend, undefined);
+  assert.ok(existsSync(join(dir, '.git', 'agent-workflow', 'batches', 'dirty-batch', 'handoffs', 'first.md')));
+});
