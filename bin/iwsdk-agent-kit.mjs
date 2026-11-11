@@ -14,6 +14,6 @@ try {
     if (result.some(item => item.action === 'conflict')) process.exitCode = 2;
   } else if (command === 'doctor') console.log(JSON.stringify(inspectProject(target), null, 2));
   else if (command === 'batch') await orchestrate(flags, target);
-  else if (!command || command === '--help' || command === '-h') console.log('iwsdk-agent-kit init [--dry-run] | doctor | batch plan|start|status|checkpoint|handoff|retry|collect|integrate|publish|cleanup');
+  else if (!command || command === '--help' || command === '-h') console.log('iwsdk-agent-kit init [--dry-run] | doctor | batch plan|start|status|checkpoint|handoff|retry|collect|integrate|publish|cleanup (cross-provider: --allow-cross-provider BACKEND --approve)');
   else throw Error('Unknown command: ' + command);
 } catch (error) { console.error(error.message); process.exitCode = 1; }
