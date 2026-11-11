@@ -1,6 +1,6 @@
 {
   "name": "iwsdk-agent-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Portable IWSDK coding-agent workflow",
   "type": "module",
   "bin": {
