@@ -81,3 +81,10 @@ export function writeHandoff(state, feature) {
   writeFileSync(path, renderHandoff(state, feature, details));
   return path;
 }
+
+/** Advisory only: never trigger an automatic backend switch from log text. */
+export function classifyFailure(raw) {
+  if (/\b(?:rate[- ]limit(?:ed|ing)?|quota exceeded|usage limit|usage cap|insufficient credits|too many requests|weekly limit reached|monthly limit reached|subscription limit reached)\b/i.test(raw)) return 'possible-usage-limit';
+  if (/\b(?:permission denied|approval denied|unauthorized|authentication failed)\b/i.test(raw)) return 'permission-or-auth';
+  return 'unclassified';
+}
