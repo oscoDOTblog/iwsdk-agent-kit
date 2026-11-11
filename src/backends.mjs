@@ -1,7 +1,7 @@
-// One CLI backend per batch. Do not run mixed provider workers in the same batch.
-export const BACKENDS = Object.freeze(['codex', 'claude', 'opencode']);
+// A batch has one default CLI; explicit, reviewed handoffs can change a stopped feature's CLI.
+export const BACKENDS = Object.freeze(['codex', 'claude', 'opencode', 'muse']);
 export function backendName(value = 'codex') {
-  if (!BACKENDS.includes(value)) throw new Error(`Unsupported agent backend: ${value}. Choose codex, claude or opencode.`);
+  if (!BACKENDS.includes(value)) throw new Error(`Unsupported agent backend: ${value}. Choose codex, claude, opencode or muse.`);
   return value;
 }
 export function backendRole(value = 'codex') {
@@ -9,6 +9,7 @@ export function backendRole(value = 'codex') {
     codex: '.codex/agents/feature_engineer.toml',
     claude: '.claude/agents/feature-engineer.md',
     opencode: '.opencode/agents/feature-engineer.md',
+    muse: '.agents/agents/feature-engineer.md',
   }[backendName(value)];
 }
 const CLAUDE_TOOLS = [
@@ -33,6 +34,12 @@ export function workerInvocation(value, feature, common, prompt) {
     args: ['-p', '--agent', 'feature-engineer', '--output-format', 'json', '--permission-mode', 'dontAsk',
       '--allowedTools', ...CLAUDE_TOOLS, '--disallowedTools', 'mcp__*'],
     stdin: prompt,
+  };
+  if (backend === 'muse') return {
+    command: 'muse',
+    // Headless Muse Code: keep its OS sandbox enabled. Never use --yolo.
+    args: ['exec', '--disable-approval', '--max-model-steps', '48', prompt],
+    stdin: '',
   };
   // OpenCode agent grants only listed commands. Do not use --auto.
   return {
@@ -64,6 +71,12 @@ export function parseWorkerResult(value, raw) {
   const parsed = raw.trim().split(/\r?\n/).map(line => {
     try { return JSON.parse(line); } catch { return null; }
   }).filter(Boolean);
+  if (backend === 'muse') {
+    // Plain-text muse exec output; the worker checks the process exit status,
+    // committed diff and later integration tests independently.
+    if (!raw.trim()) throw new Error('Muse returned an empty report; inspect worker.jsonl');
+    return raw.trim();
+  }
   if (backend === 'claude') {
     const report = parsed.findLast(e => e.type === 'result') ?? parsed.at(-1);
     if (!report || report.is_error || (report.subtype && report.subtype !== 'success') ||
