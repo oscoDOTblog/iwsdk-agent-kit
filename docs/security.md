@@ -9,3 +9,5 @@ Running `npm ci` may execute dependency lifecycle scripts. Review lockfiles and 
 Do not include personal absolute paths, access tokens, private project files or licensed assets when publishing this template. Use separate environment-specific secrets management for each project.
 
 Mocked tests do not establish live CLI authentication or headset compatibility.
+
+Quota and rate-limit detection is advisory only. The runner never automatically switches providers, bypasses approvals, resets dirty worktrees, or transfers secrets across agents. The shared AGENT_CONTEXT.md should contain no credentials or sensitive transcripts. Muse runs headlessly with its sandbox enabled and without --yolo. Managed installer file replacements are backed up in an ignored directory; inspect the changes before committing.
