@@ -57,6 +57,10 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
     ['src/backends.mjs','scripts/backends.mjs'],
     ['src/handoff.mjs','scripts/handoff.mjs'],
     ['src/provider-policy.mjs','scripts/provider-policy.mjs'],
+    ['src/prompt.mjs','scripts/prompt.mjs'],
+    ['src/usage.mjs','scripts/usage.mjs'],
+    ['src/review.mjs','scripts/review.mjs'],
+    ['src/cache-audit.mjs','scripts/cache-audit.mjs'],
     ['templates/.codex/agents/feature_engineer.toml','.codex/agents/feature_engineer.toml'],
     ['templates/.claude/agents/feature-engineer.md','.claude/agents/feature-engineer.md'],
     ['templates/.opencode/agents/feature-engineer.md','.opencode/agents/feature-engineer.md'],
@@ -87,7 +91,7 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
   })() : 'main';
   const config=join(root,'iwsdk-agent-kit.config.json');
   write(config,JSON.stringify({version:2,baseBranch:base,backend:'codex',providerIsolation:'strict',maxConcurrency:2,detectedSDK:detected.sdk},null,2)+'\n','new-only');
-  const scripts={plan:'node scripts/agents.mjs plan',start:'node scripts/agents.mjs start',status:'node scripts/agents.mjs status',checkpoint:'node scripts/agents.mjs checkpoint',handoff:'node scripts/agents.mjs handoff',retry:'node scripts/agents.mjs retry',collect:'node scripts/agents.mjs collect',integrate:'node scripts/agents.mjs integrate',publish:'node scripts/agents.mjs publish',cleanup:'node scripts/agents.mjs cleanup'};
+  const scripts={plan:'node scripts/agents.mjs plan',start:'node scripts/agents.mjs start',status:'node scripts/agents.mjs status',usage:'node scripts/agents.mjs usage','cache-audit':'node scripts/cache-audit.mjs','review-prompt':'node scripts/agents.mjs review-prompt',checkpoint:'node scripts/agents.mjs checkpoint',handoff:'node scripts/agents.mjs handoff',retry:'node scripts/agents.mjs retry',collect:'node scripts/agents.mjs collect',integrate:'node scripts/agents.mjs integrate',publish:'node scripts/agents.mjs publish',cleanup:'node scripts/agents.mjs cleanup'};
   pkg.scripts ??= {};
   for(const [key,value] of Object.entries(scripts)) {
     const name='agents:'+key;

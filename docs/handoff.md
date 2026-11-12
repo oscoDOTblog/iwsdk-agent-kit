@@ -117,3 +117,7 @@ Muse headless execution uses `muse exec --disable-approval` with its OS
 sandbox **enabled**. The kit never uses `--yolo`. A zero exit code alone
 does not prove the feature works; the coordinator still requires commits,
 review, and project tests.
+
+## Compact context for worker restarts (v0.4)
+
+The original full handoff `handoffs/<feature>.md` is preserved. The coordinator also writes `handoffs/<feature>.compact.md` with a bounded factual summary for the next worker prompt. It includes only explicit decisions, known file paths, Git state, last error and a clearly unverified agent report. Old batches without a compact checkpoint still work with a truncated full handoff. See [token efficiency](token-efficiency.md).

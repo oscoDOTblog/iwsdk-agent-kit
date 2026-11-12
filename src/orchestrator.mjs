@@ -6,7 +6,10 @@ import { resolve, join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { backendName, backendRole, workerInvocation, parseWorkerResult, preflightFor, workerEnvironment } from './backends.mjs';
-import { handoffContext, sharedContext, writeHandoff, classifyFailure } from './handoff.mjs';
+import { sharedContext, compactHandoffContext, writeHandoff, classifyFailure } from './handoff.mjs';
+import { buildWorkerPrompt, readPromptSettings } from './prompt.mjs';
+import { readBatchUsage, formatUsageReport } from './usage.mjs';
+import { writeReviewPrompt } from './review.mjs';
 import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
 
 const self = fileURLToPath(import.meta.url);
@@ -57,6 +60,9 @@ export function parseBatch(input) {
     if (typeof f.interfaces !== 'string' || !f.interfaces.trim()) fail(`${f.id}: coordinator must settle interfaces (or state none)`);
     if (typeof f.contentChanges !== 'boolean' || typeof f.runtimeRequired !== 'boolean') fail(`${f.id}: contentChanges/runtimeRequired must be booleans`);
     if (f.backend !== undefined) f.backend = backendName(f.backend);
+    if (f.decisions !== undefined && (!Array.isArray(f.decisions) || !f.decisions.every(v => typeof v === 'string' && v.trim()))) {
+      fail(f.id + ': decisions must be a list of confirmed non-empty strings');
+    }
     f.dependsOn ??= [];
     if (!Array.isArray(f.dependsOn) || !f.dependsOn.every(validId)) fail('dependsOn must list feature ids');
   }
@@ -127,27 +133,16 @@ export function workerArgs(f, common) {
 function prompt(state, f) {
   const backend = backendName(f.backend ?? state.backend);
   const role = readFileSync(join(state.workflowSource, backendRole(backend)), 'utf8');
-  const context = sharedContext(state);
-  const checkpoint = handoffContext(state, f);
-  return `${role}\nImplement only this approved assignment. Follow root and scoped AGENTS.md and inspect the actual project architecture.
-Shared project context (coordinator-owned, do not edit from this feature worker):
-${context}
-Previous checkpoint (review before resuming; may describe incomplete or unverified work):
-${checkpoint || '(first attempt; no previous checkpoint)'}
-Assignment:
-${JSON.stringify(f, null, 2)}
-Baseline ${state.baseline}; dependency interfaces: ${f.interfaces}.
-Own only assigned paths. Do not edit other paths; report needed changes as BLOCKED.
-Preserve partial work from previous attempts. Do not change dependencies or save formats
-unless specifically owned and authorized. No recursive agents or worker processes.
-Do not launch IWSDK/browser/XR sessions. No push, PR, resets, cleanup or merge to the base branch.
-Run only checks actually available in this project. Commit changes on the assigned branch.
-Report exact checks, limitations, runtime acceptance steps and commit hash.
-If sandbox/network/usage limits block work, report BLOCKED; never escalate.
-Leave unfinished work intact.
-`;
+  const settings = state.promptSettings ?? readPromptSettings(state.repo);
+  const budget = settings.promptContextBudget;
+  return buildWorkerPrompt({
+    role,
+    projectContext: sharedContext(state, budget.projectChars),
+    checkpoint: compactHandoffContext(state, f, budget.handoffChars),
+    feature: f,
+    baseline: state.baseline,
+  });
 }
-
 async function worker(specPath) {
   const { state, feature: f, common, providerAuthorization } = json(specPath);
   const workerBackend = backendName(f.backend ?? state.backend);
@@ -166,7 +161,8 @@ async function worker(specPath) {
     const install = spawnSync('npm', ['ci', '--no-audit', '--no-fund'], { cwd: f.worktree, stdio: ['ignore', installLog, installLog] }); closeSync(installLog);
     if (install.status !== 0) fail(`npm ci failed (${install.status}); see worker log`);
     const backend = backendName(f.backend ?? state.backend);
-    const invocation = workerInvocation(backend, f, common, prompt(state, f));
+    const model = (state.promptSettings ?? readPromptSettings(state.repo)).workerModels[backend] ?? null;
+    const invocation = workerInvocation(backend, f, common, prompt(state, f), { model });
     const code = await new Promise((resolveCode, reject) => {
       const child = spawn(invocation.command, invocation.args, { cwd: f.worktree, stdio: ['pipe', log, log], env: { ...workerEnvironment(backend), AGENT_WORKER_SPEC: specPath } });
       atomic(join(f.attemptDirectory, 'child.json'), { pid: child.pid });
@@ -345,6 +341,7 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
   if (command === 'plan') {
     const requested = json(resolve(cwd, id));
     const policy = readProviderPolicy(ctx.repo);
+    const promptSettings = readPromptSettings(ctx.repo);
     // A missing batch backend inherits the configured provider, not a hard-coded
     // Codex default. Explicit batch/feature overrides are checked below.
     const batch = parseBatch({ ...requested, backend: requested.backend ?? policy.configuredBackend });
@@ -365,13 +362,18 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
     const baseline = git(ctx.repo, 'rev-parse', '--verify', `refs/heads/${baseBranch}^{commit}`);
     // Use the committed baseline without modifying the original checkout.
     const state = { ...batch, baseBranch, version: 1, baseline, repo: ctx.repo, root: ctx.root, directory, workflowSource: ctx.repo, worktreeRoot: ctx.worktreeRoot, createdAt: new Date().toISOString(),
-      plannedProviderAuthorization: { ...providerAuthorization, at: new Date().toISOString() } };
+      plannedProviderAuthorization: { ...providerAuthorization, at: new Date().toISOString() }, promptSettings };
     state.features = batch.features.map(f => ({ ...f, ...paths(ctx.worktreeRoot, batch.id, f.id), status: 'pending' }));
     save(state); console.log(JSON.stringify(state, null, 2)); return;
   }
   const state = load(ctx, id);
   state.backend = backendName(state.backend); // Pre-migration batches remain Codex-backed.
   if (command === 'status') { refresh(state); console.log(JSON.stringify(state, null, 2)); return; }
+  if (command === 'usage') {
+    const report = readBatchUsage(state);
+    console.log(flags.includes('--json') ? JSON.stringify(report, null, 2) : formatUsageReport(report));
+    return;
+  }
   await locked(state, async () => {
     switch (command) {
       case 'start': approved(flags); await start(ctx, state, flags); break;
@@ -379,6 +381,12 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
       case 'integrate': approved(flags); integration(state); break;
       case 'publish': approved(flags); publish(state); break;
       case 'cleanup': approved(flags); cleanup(state); break;
+      case 'review-prompt': {
+        const f = state.features.find(feature => feature.id === flags[0]);
+        if (!f) fail('Specify a valid feature id for review-prompt');
+        console.log(writeReviewPrompt(state, f));
+        break;
+      }
       case 'checkpoint': {
         const targets = flags[0] ? state.features.filter(f => f.id === flags[0]) : state.features;
         if (!targets.length) fail('Unknown feature for checkpoint');
@@ -411,7 +419,7 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
         }
         f.status = 'pending'; delete f.error; break;
       }
-      default: fail('Commands: plan FILE [--backend codex] | start ID --approve | handoff ID FEATURE --backend muse --approve | retry ID FEATURE --approve | checkpoint ID [FEATURE] | collect/integrate/publish/cleanup ID. Cross-provider: add --allow-cross-provider BACKEND --approve to plan, start and handoff.');
+      default: fail('Commands: plan FILE | start/status/usage/collect/integrate/publish/cleanup ID | review-prompt ID FEATURE | checkpoint ID [FEATURE] | handoff/retry ID FEATURE --approve. Cross-provider: --allow-cross-provider BACKEND --approve.');
     }
   });
 }
