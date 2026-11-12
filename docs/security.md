@@ -17,3 +17,9 @@ Quota and rate-limit detection is advisory only. The runner never automatically 
 The project config's `backend` is the only allowed worker CLI by default. The runner checks plan, start (including legacy batches), retry and handoff, and detects Codex/Claude coordinator environment markers when available. A cross-provider operation requires `--allow-cross-provider BACKEND --approve` on that command, including every start. No automatic fallback or permanent override is granted. See [provider isolation](provider-isolation.md).
 
 This is not an OS sandbox: a model with terminal access can invoke other provider CLIs directly or choose override flags. Human approval must be enforced by the operator's workflow; for a hard restriction, remove other provider CLIs or credentials from the environment.
+
+## Token observability and cache audits
+
+Usage reports inspect local model logs already stored in the batch directory. They never send logs to another service or expose subscription balances. `agents:usage --json` includes provider, model identifier, attempt metadata and numeric metrics, but not raw prompts. CLI versions may not expose these metrics; missing data is unknown.
+
+The cache audit reads user and project Claude settings, Markdown skills and MCP config, but emits only file paths, line numbers and heuristic findings. It must not print credentials, endpoint values or raw settings. Do not weaken security permissions to chase cache hits. `agents:review-prompt` writes an isolated review assignment and does not execute a paid provider; manual review remains mandatory.
