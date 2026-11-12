@@ -11,6 +11,7 @@ import { buildWorkerPrompt, readPromptSettings } from './prompt.mjs';
 import { readBatchUsage, formatUsageReport } from './usage.mjs';
 import { writeReviewPrompt } from './review.mjs';
 import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
+import { recordEvidence, inspectEvidence } from './evidence.mjs';
 
 const self = fileURLToPath(import.meta.url);
 const fail = message => { throw new Error(message); };
@@ -125,7 +126,13 @@ async function locked(state, fn) {
 }
 function approved(flags) { if (!flags.includes('--approve')) fail('Explicit authorization required: add --approve'); }
 export function ready(state) {
-  return state.features.filter(f => f.status === 'pending' && f.dependsOn.every(id => ['completed', 'collected'].includes(state.features.find(x => x.id === id).status)));
+  const candidates = state.features.filter(f => f.status === 'pending' &&
+    f.dependsOn.every(id => ['completed', 'collected'].includes(state.features.find(x => x.id === id).status)));
+  if (state.conductor?.enabled && Array.isArray(state.conductor.priority)) {
+    const rank = new Map(state.conductor.priority.map((id, index) => [id, index]));
+    candidates.sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
+  }
+  return candidates;
 }
 export function workerArgs(f, common) {
   return ['exec', '--strict-config', '--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'agents.enabled=false', '--add-dir', common, '--cd', f.worktree, '--json', '--output-last-message', join(f.attemptDirectory, 'summary.md'), '-'];
@@ -197,7 +204,7 @@ function createFeature(state, f) {
   }
   f.startHead ??= git(f.worktree, 'rev-parse', 'HEAD');
 }
-async function start(ctx, state, flags) {
+async function start(ctx, state, flags, options = {}) {
   // Recheck on EVERY start, even for batches planned before provider isolation existed.
   // This must run before preflight, npm ci, worktree creation, or any model CLI.
   const policy = readProviderPolicy(ctx.repo);
@@ -218,7 +225,10 @@ async function start(ctx, state, flags) {
     fail(`Worker preflight blocked before inference: ${e.message}`);
   }
   let lastCheckpoint = 0;
+  const limits = options.conductor ?? null;
+  let launched = 0;
   for (;;) {
+    if (limits && Date.now() >= limits.deadlineAt) break;
     refresh(state);
     if (Date.now() - lastCheckpoint >= 60000) {
       for (const f of state.features.filter(f => f.status === 'running')) writeHandoff(state, f);
@@ -226,7 +236,8 @@ async function start(ctx, state, flags) {
     }
     let running = state.features.filter(f => f.status === 'running').length;
     for (const f of ready(state)) {
-      if (running >= state.maxConcurrency) break;
+      if (limits && (launched >= limits.maxStarts || Date.now() >= limits.deadlineAt)) break;
+      if (running >= (limits?.maxConcurrency ?? state.maxConcurrency)) break;
       try {
         createFeature(state, f);
         f.attempt = (f.attempt ?? 0) + 1;
@@ -238,20 +249,32 @@ async function start(ctx, state, flags) {
         f.status = 'running'; f.pid = process.pid; save(state);
         const child = spawn(process.execPath, [self, '_worker', specPath], { detached: true, stdio: 'ignore' });
         if (!child.pid) fail('Worker spawn failed');
-        child.on('error', () => {}); child.unref(); f.pid = child.pid; running++; save(state);
+        child.on('error', () => {}); child.unref(); f.pid = child.pid; running++; launched++; save(state);
       } catch (e) { f.status = 'blocked'; f.error = e.message; save(state); }
     }
     save(state);
     if (!state.features.some(f => f.status === 'running')) {
-      for (const f of state.features) if (f.status === 'pending') { f.status = 'blocked'; f.error = 'Dependency incomplete; retry after prerequisite succeeds'; }
+      if (!limits) {
+        for (const f of state.features) if (f.status === 'pending') {
+          f.status = 'blocked'; f.error = 'Dependency incomplete; retry after prerequisite succeeds';
+        }
+      }
       save(state); break;
     }
+    // A scheduling limit pauses the coordinator; already launched detached workers
+    // are never killed or duplicated. The next invocation reconciles receipts.
+    if (limits && (launched >= limits.maxStarts || Date.now() >= limits.deadlineAt)) break;
     await new Promise(r => setTimeout(r, 1000));
   }
   console.log(JSON.stringify(state.features.map(({ id, status, error }) => ({ id, status, error })), null, 2));
-  if (state.features.some(f => !['completed', 'collected'].includes(f.status))) fail('Batch incomplete; inspect status and logs before retry');
+  if (!limits && state.features.some(f => !['completed', 'collected'].includes(f.status))) {
+    fail('Batch incomplete; inspect status and logs before retry');
+  }
 }
 function collect(state) {
+  if (state.conductor?.enabled && !inspectEvidence(state).complete) {
+    fail('Conductor batch requires current acceptance evidence for every criterion before collection');
+  }
   state.collection = [];
   for (const f of state.features) {
     if (!['completed', 'collected'].includes(f.status)) fail(`${f.id}: ${f.status}; not collectable`);
@@ -267,6 +290,9 @@ function collect(state) {
   console.log(`Review collection.json and diffs, then fill ${reviewPath}. Evidence is required; do not simply toggle approval.`);
 }
 function review(state) {
+  if (state.conductor?.enabled && !inspectEvidence(state).complete) {
+    fail('Conductor acceptance evidence is missing or stale');
+  }
   const r = json(join(state.directory, 'review.json'));
   if (!r.approved || !r.architecture?.trim() || !r.tests?.trim()) fail('Coordinator architecture/test review required');
   for (const f of state.features) {
@@ -334,9 +360,19 @@ function cleanup(state) {
   }
   console.log('Completed feature worktrees removed; branches, logs and integration worktree preserved.');
 }
-export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
+export async function main(args = process.argv.slice(2), cwd = process.cwd(), options = {}) {
   const [command, id, ...flags] = args;
   if (command === '_worker') return worker(id);
+  if (command === 'conduct') {
+    const { conduct } = await import('./conductor.mjs');
+    console.log(JSON.stringify(await conduct(cwd, id, flags), null, 2));
+    return;
+  }
+  if (command === 'conduct-status') {
+    const { conductorStatus } = await import('./conductor.mjs');
+    console.log(JSON.stringify(conductorStatus(cwd, id), null, 2));
+    return;
+  }
   const ctx = context(cwd);
   if (command === 'plan') {
     const requested = json(resolve(cwd, id));
@@ -376,7 +412,25 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
   }
   await locked(state, async () => {
     switch (command) {
-      case 'start': approved(flags); await start(ctx, state, flags); break;
+      case 'start': approved(flags); await start(ctx, state, flags, options); break;
+      case 'evidence': {
+        if (!flags.length || flags.includes('--json')) {
+          console.log(JSON.stringify(inspectEvidence(state), null, 2));
+          break;
+        }
+        approved(flags);
+        const criterion = flags[1];
+        const option = name => {
+          const at = flags.indexOf('--' + name);
+          return at >= 0 ? flags[at + 1] : undefined;
+        };
+        const result = recordEvidence(state, flags[0], criterion, {
+          status: option('status'), kind: option('kind'),
+          artifact: option('artifact'), note: option('note'),
+        });
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
       case 'collect': collect(state); break;
       case 'integrate': approved(flags); integration(state); break;
       case 'publish': approved(flags); publish(state); break;
@@ -419,7 +473,7 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
         }
         f.status = 'pending'; delete f.error; break;
       }
-      default: fail('Commands: plan FILE | start/status/usage/collect/integrate/publish/cleanup ID | review-prompt ID FEATURE | checkpoint ID [FEATURE] | handoff/retry ID FEATURE --approve. Cross-provider: --allow-cross-provider BACKEND --approve.');
+      default: fail('Commands: plan FILE | start/conduct/conduct-status/status/usage/evidence/collect/integrate/publish/cleanup ID | evidence ID FEATURE CRITERION --status passed --kind test --artifact FILE --note TEXT --approve | review-prompt ID FEATURE | checkpoint ID [FEATURE] | handoff/retry ID FEATURE --approve. Cross-provider: --allow-cross-provider BACKEND --approve.');
     }
   });
 }
