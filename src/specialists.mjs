@@ -175,7 +175,7 @@ export function runTargetedTests(state, feature, seconds, { execute = spawnSync 
   return reports;
 }
 
-export function checkerPrompt(feature, diff, tests) {
+export function checkerPrompt(feature, diff, tests, dependencyContext = '') {
   return [
     'You are an independent read-only patch checker. Inspect callers using Read/Grep/Glob only; no edits, shell commands, subagents, or provider handoffs.',
     'You are given the ACTUAL git diff for the recorded commit. Review changed callers, likely regressions, and acceptance gaps.',
@@ -188,6 +188,7 @@ export function checkerPrompt(feature, diff, tests) {
       chars: diff.chars, truncated: diff.truncated }),
     'Targeted test results:', JSON.stringify(tests),
     'Actual diff:\n' + diff.patch,
+    ...(dependencyContext ? [dependencyContext] : []),
   ].join('\n\n');
 }
 
