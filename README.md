@@ -2,7 +2,7 @@
 
 A reusable, project-aware multi-agent development workflow for Meta IWSDK projects. Run **Codex**, **Claude Code**, **OpenCode**, or **Meta Muse Code** independently. Feature workers use isolated Git worktrees, with explicit review and integration gates.
 
-> **Experimental v0.4.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
+> **Experimental v0.5.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
 
 ## Install into an existing IWSDK project
 
@@ -35,6 +35,36 @@ npm run agents:publish -- example-batch --approve
 ```
 
 To use `claude`, `opencode` or `muse` by default, first change `backend` in `iwsdk-agent-kit.config.json` to that provider. An unexpected provider is blocked unless the command includes `--allow-cross-provider BACKEND --approve`. The batch has a default backend, but an explicitly reviewed handoff can reassign a **stopped** feature to another CLI. Running `publish` pushes an integration branch and creates a PR; it never merges the PR.
+
+## Optional Conductor Mode (v0.5)
+
+The existing manual worktree workflow remains the default. **Conductor Mode
+is disabled unless explicitly enabled in the project config and invoked
+with `--approve`.** It uses the same worker runner, worktrees, provider
+isolation, checkpoints, and manual integration/publishing gates.
+
+```bash
+npm run agents:plan -- features.json
+npm run agents:conduct -- my-batch --approve
+npm run agents:conduct-status -- my-batch
+npm run agents:evidence -- my-batch
+```
+
+- Optional read-only Claude/Codex planner prioritizes **already approved**
+  feature tasks; it cannot expand scope or change dependency rules.
+- Existing worker model pins still select implementers; separate planner
+  and verifier model pins are supported.
+- Deterministic scheduling respects bounded concurrency, total worker
+  launches, narrowly scoped transient retries, and per-invocation
+  scheduling time. Detached workers are not killed when the supervisor pauses.
+- A commit-bound acceptance ledger requires independently reviewed
+  artifacts before conductor batches can be collected or integrated.
+- Resume the same batch without restarting completed workers.
+- **No automatic provider switching, auto-integration, auto-publishing, or
+  hard monetary spending cap.** Model-based verification is advisory only.
+
+See the [Conductor Mode guide](docs/conductor.md) for configuration,
+safety limitations, evidence commands, and upgrade instructions.
 
 ## Token efficiency and usage reporting (v0.4)
 
