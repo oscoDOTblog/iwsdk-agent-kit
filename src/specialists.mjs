@@ -179,7 +179,7 @@ export function checkerPrompt(feature, diff, tests) {
     'You are given the ACTUAL git diff for the recorded commit. Review changed callers, likely regressions, and acceptance gaps.',
     'Tests are deterministic local results, not model assertions. Missing tests are not passes.',
     'Never approve the acceptance ledger, integration, or publishing.',
-    'Return ONLY JSON: {"verdict":"pass|fail|needs-human","summary":"short","findings":[{"path":"relative path","line":1,"severity":"high|medium|low","detail":"short"}]}.',
+    'Return ONLY JSON: {"verdict":"pass|fail|needs-human","summary":"short","findings":[{"path":"relative changed file or verified caller","line":1,"severity":"high|medium|low","detail":"short"}]}.',
     'Feature:', JSON.stringify({ id: feature.id, head: feature.head, acceptance: feature.acceptance,
       interfaces: feature.interfaces, runtimeRequired: feature.runtimeRequired }),
     'Diff metadata:', JSON.stringify({ head: diff.head, base: diff.base, sha256: diff.sha256,
@@ -189,16 +189,23 @@ export function checkerPrompt(feature, diff, tests) {
   ].join('\n\n');
 }
 
-export function validateChecker(data, diff) {
+export function validateChecker(data, diff, worktree = null) {
   if (!data || !['pass', 'fail', 'needs-human'].includes(data.verdict) ||
       !small(data.summary, 1500) || !Array.isArray(data.findings) || data.findings.length > 30) {
     throw new Error('Invalid checker report');
   }
   const paths = new Set([...diff.patch.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map(m => m[2]));
   const findings = data.findings.map(f => {
-    if (!f || !paths.has(f.path) || !Number.isInteger(f.line) || f.line < 1 ||
+    if (!f || !safePath(f.path) || !Number.isInteger(f.line) || f.line < 1 ||
         !['high', 'medium', 'low'].includes(f.severity) || !small(f.detail, 500)) {
-      throw new Error('Checker finding requires changed file, positive line, severity, detail');
+      throw new Error('Checker finding requires changed file or verified caller, positive line, severity, detail');
+    }
+    if (!paths.has(f.path)) {
+      if (!worktree) throw new Error('Checker finding requires changed file or verified caller');
+      const file = pathIn(worktree, f.path);
+      if (f.line > readFileSync(file, 'utf8').split('\n').length) {
+        throw new Error('Checker caller line outside source file');
+      }
     }
     return { path: f.path, line: f.line, severity: f.severity, detail: f.detail };
   });
@@ -207,7 +214,7 @@ export function validateChecker(data, diff) {
 }
 
 export function saveCheck(state, feature, diff, tests, result) {
-  const data = validateChecker(result.data, diff);
+  const data = validateChecker(result.data, diff, feature.worktree);
   const saved = { head: feature.head, diff: { sha256: diff.sha256, chars: diff.chars,
     truncated: diff.truncated }, tests, ...result, data,
     status: tests.some(t => t.status !== 'passed') ? 'failed-tests' : data.verdict };
