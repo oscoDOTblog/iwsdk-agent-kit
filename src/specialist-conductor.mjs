@@ -2,6 +2,7 @@ import { investigationPrompt, runSpecialist, saveInvestigation, captureFeatureDi
   runTargetedTests, checkerPrompt, saveCheck } from './specialists.mjs';
 import { run } from './orchestrator.mjs';
 import { prepareFeatureContext, featureContext, checkerDependencyContext } from './context-enrichment.mjs';
+import { runRegressionProof } from './convergence.mjs';
 
 export function specialistRuns(conductor) {
   conductor.specialistRuns ??= { calls: [], investigations: {}, checks: {} };
@@ -70,7 +71,7 @@ export async function exploreFeature(state, conductor, cfg, feature, persist, no
 }
 
 export function checkFeature(state, conductor, cfg, feature, persist, note) {
-  if (!canInvoke(conductor, cfg, 'checker')) {
+  if (!cfg.convergence?.enabled && !canInvoke(conductor, cfg, 'checker')) {
     note(conductor, 'specialist-budget-exhausted', 'Checker invocation limit reached');
     persist(state, conductor); return false;
   }
@@ -89,6 +90,27 @@ export function checkFeature(state, conductor, cfg, feature, persist, note) {
         reason: 'Targeted tests left a dirty worktree; no files were discarded', tests };
       note(conductor, 'checker-needs-human', feature.id + ': tests left uncommitted changes');
       persist(state, conductor); return true;
+    }
+    if (cfg.convergence?.enabled) {
+      const proof = runRegressionProof(state, feature, tests, cfg.specialists.maxTestSeconds);
+      if (!['verified', 'still-failing', 'not-requested'].includes(proof.status)) {
+        specialistRuns(conductor).checks[feature.id] = { head: feature.head, status: 'needs-human',
+          reason: 'Regression proof ' + proof.status + ': ' + (proof.reason ?? 'baseline test did not reproduce the bug'),
+          tests, regression: proof };
+        note(conductor, 'checker-needs-human', feature.id + ': regression proof requires review');
+        persist(state, conductor); return true;
+      }
+      if (tests.some(t => t.status !== 'passed')) {
+        specialistRuns(conductor).checks[feature.id] = { head: feature.head, status: 'failed-tests',
+          reason: 'Deterministic targeted tests failed; no paid checker invoked',
+          tests, regression: proof, diff: { sha256: diff.sha256, chars: diff.chars } };
+        note(conductor, 'failed-tests', feature.id + ': deterministic tests failed; repair eligibility will be evaluated');
+        persist(state, conductor); return true;
+      }
+    }
+    if (!canInvoke(conductor, cfg, 'checker')) {
+      note(conductor, 'specialist-budget-exhausted', 'Checker invocation limit reached');
+      persist(state, conductor); return false;
     }
     const call = reserveSpecialist(state, conductor, cfg, 'checker', feature, persist);
     if (!call) return false;
