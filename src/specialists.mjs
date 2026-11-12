@@ -151,13 +151,17 @@ export function captureFeatureDiff(state, feature, maxChars) {
 export function runTargetedTests(state, feature, seconds, { execute = spawnSync } = {}) {
   const tests = validateTargetedTests(feature.targetedTests);
   const reports = [];
+  // A conductor can itself be tested under node --test. Do not let Node's
+  // recursive test-runner guard silently skip the explicitly requested tests.
+  const environment = { ...process.env };
+  delete environment.NODE_TEST_CONTEXT;
   for (const [index, path] of tests.entries()) {
     pathIn(feature.worktree, path);
     const output = join(state.directory, 'conductor', 'tests', feature.id, String(index + 1) + '.log');
     mkdirSync(dirname(output), { recursive: true });
     const result = execute(process.execPath, ['--test', path], {
       cwd: feature.worktree, encoding: 'utf8', timeout: seconds * 1000, maxBuffer: 1024 * 1024,
-      shell: false,
+      shell: false, env: environment,
     });
     const log = 'Command: node --test ' + path + '\nCommit: ' + feature.head + '\nExit: ' +
       String(result.status) + '\nError: ' + String(result.error?.message ?? 'none') + '\n' +
