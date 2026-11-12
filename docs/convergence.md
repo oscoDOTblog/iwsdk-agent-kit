@@ -135,6 +135,8 @@ Artifacts in the Git common-directory batch state:
 - Only TAP failure names, expected, actual and error fields enter compact
   feedback. Test logs remain on disk; no raw log is automatically sent
   to an agent. As with any test output, avoid printing secrets.
+- Missing-module/dependency errors are escalated for environment diagnosis
+  rather than automatically triggering a code repair.
 - The fingerprint detects repeated *observed* failures; it cannot prove
   two root causes are identical, or recognize every semantically identical
   error. A repeat stop requires a human to reassess the task.
