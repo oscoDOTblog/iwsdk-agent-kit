@@ -412,6 +412,7 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd(), op
   }
   await locked(state, async () => {
     switch (command) {
+      case 'reconcile': refresh(state); break;
       case 'start': approved(flags); await start(ctx, state, flags, options); break;
       case 'evidence': {
         if (!flags.length || flags.includes('--json')) {
