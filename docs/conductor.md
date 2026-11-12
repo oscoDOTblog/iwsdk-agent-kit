@@ -1,4 +1,8 @@
-# Optional Conductor Mode (v0.5)
+# Optional Conductor Mode (v0.5 foundation; v0.6 specialists)
+
+v0.6 adds separately opt-in explorer, fixer-model, and diff-aware checker
+profiles with targeted test evidence and per-role usage. These are disabled
+by default; see [Specialist Workers](specialists.md).
 
 Conductor Mode is an **opt-in supervisor** layered over the existing manual
 worktree scheduler. It does not replace manual planning, provider isolation,
