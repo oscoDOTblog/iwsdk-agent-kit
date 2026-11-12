@@ -136,6 +136,12 @@ per-batch scheduler lock. If it exits while detached workers are still
 running, a later invocation reconciles receipts instead of relaunching
 those workers.
 
+## v0.8 opt-in Convergence Loop
+
+An optional deterministic test/repair loop can queue bounded fixes for
+failed targeted tests. It never treats model output as acceptance evidence,
+and repeat failures stop. See [Convergence Loop](convergence.md).
+
 ## Commit-bound acceptance ledger
 
 Every acceptance criterion begins as **pending**, even if a worker reports
