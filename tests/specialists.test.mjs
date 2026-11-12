@@ -73,13 +73,13 @@ test('only approved, relative test files are allowed; shell commands cannot be i
   }
 });
 
-test('explorer is read-only, checker has no tools, and neither can spawn nested agents', () => {
+test('explorer and checker have read-only tools and cannot spawn nested agents', () => {
   const explorer = specialistInvocation('claude', 'explorer', 'haiku', 'Inspect', '/tmp/out');
   assert.ok(explorer.args.includes('Read,Grep,Glob'));
   assert.ok(explorer.args.includes('Agent,mcp__*'));
   assert.ok(!explorer.args.includes('Edit'));
   const checker = specialistInvocation('claude', 'checker', 'sonnet', 'Review', '/tmp/out');
-  assert.equal(checker.args[checker.args.indexOf('--tools') + 1], '');
+  assert.equal(checker.args[checker.args.indexOf('--tools') + 1], 'Read,Grep,Glob');
   const codex = specialistInvocation('codex', 'checker', null, 'Review', '/tmp/out');
   assert.ok(codex.args.includes('read-only'));
   assert.ok(codex.args.includes('agents.enabled=false'));
@@ -161,8 +161,9 @@ test('checker receives actual commit diff, deterministic tests and SHA-bound art
 
 test('failed targeted tests are recorded, never reported as passing evidence', () => {
   const { state, feature } = fixture();
-  writeFileSync(join(state.repo, 'src', 'main.mjs'), 'export const answer = 1;\n');
-  const tests = runTargetedTests(state, feature, 20);
+  const tests = runTargetedTests(state, feature, 20, {
+    execute: () => ({ status: 1, stdout: 'not ok 1 - answer is 42', stderr: '' }),
+  });
   assert.equal(tests[0].status, 'failed');
   assert.equal(tests[0].head, feature.head);
   const diff = captureFeatureDiff(state, feature, 16000);
