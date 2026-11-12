@@ -12,6 +12,7 @@ import { readBatchUsage, formatUsageReport } from './usage.mjs';
 import { writeReviewPrompt } from './review.mjs';
 import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
 import { recordEvidence, inspectEvidence } from './evidence.mjs';
+import { investigationContext, validateTargetedTests } from './specialists.mjs';
 
 const self = fileURLToPath(import.meta.url);
 const fail = message => { throw new Error(message); };
@@ -61,6 +62,7 @@ export function parseBatch(input) {
     if (typeof f.interfaces !== 'string' || !f.interfaces.trim()) fail(`${f.id}: coordinator must settle interfaces (or state none)`);
     if (typeof f.contentChanges !== 'boolean' || typeof f.runtimeRequired !== 'boolean') fail(`${f.id}: contentChanges/runtimeRequired must be booleans`);
     if (f.backend !== undefined) f.backend = backendName(f.backend);
+    if (f.targetedTests !== undefined) validateTargetedTests(f.targetedTests);
     if (f.decisions !== undefined && (!Array.isArray(f.decisions) || !f.decisions.every(v => typeof v === 'string' && v.trim()))) {
       fail(f.id + ': decisions must be a list of confirmed non-empty strings');
     }
@@ -145,7 +147,7 @@ function prompt(state, f) {
   return buildWorkerPrompt({
     role,
     projectContext: sharedContext(state, budget.projectChars),
-    checkpoint: compactHandoffContext(state, f, budget.handoffChars),
+    checkpoint: compactHandoffContext(state, f, budget.handoffChars) + investigationContext(state, f),
     feature: f,
     baseline: state.baseline,
   });
@@ -168,7 +170,8 @@ async function worker(specPath) {
     const install = spawnSync('npm', ['ci', '--no-audit', '--no-fund'], { cwd: f.worktree, stdio: ['ignore', installLog, installLog] }); closeSync(installLog);
     if (install.status !== 0) fail(`npm ci failed (${install.status}); see worker log`);
     const backend = backendName(f.backend ?? state.backend);
-    const model = (state.promptSettings ?? readPromptSettings(state.repo)).workerModels[backend] ?? null;
+    const model = (state.conductor?.fixerProvider === backend ? state.conductor?.fixerModel : null) ??
+      (state.promptSettings ?? readPromptSettings(state.repo)).workerModels[backend] ?? null;
     const invocation = workerInvocation(backend, f, common, prompt(state, f), { model });
     const code = await new Promise((resolveCode, reject) => {
       const child = spawn(invocation.command, invocation.args, { cwd: f.worktree, stdio: ['pipe', log, log], env: { ...workerEnvironment(backend), AGENT_WORKER_SPEC: specPath } });
