@@ -23,7 +23,8 @@ Do not push, merge or deploy without explicit approval.
 Conductor Mode is opt-in, requires --approve, and never bypasses provider isolation.
 Specialist explorer/fixer/checker roles are separately opt-in; model checks are advisory.
 Optional context mapping is offline; Context7 calls require an explicit reviewed library query and API key.
-Do not treat model-generated review notes as evidence or allow auto-integration.`;
+Do not treat model-generated review notes as evidence or allow auto-integration.
+Convergence repairs require deterministic failing tests, bounded retries and explicit approval; repeated failures stop.`;
 function mergeSection(original, body) {
   const section = `${managedStart}\n${body}\n${managedEnd}`;
   if (!original.includes(managedStart) && !original.includes(managedEnd)) return original.trimEnd() + (original.trim() ? '\n\n' : '') + section + '\n';
@@ -75,6 +76,7 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
     ['src/context7-docs.mjs','scripts/context7-docs.mjs'],
     ['src/dependency-map.mjs','scripts/dependency-map.mjs'],
     ['src/context-enrichment.mjs','scripts/context-enrichment.mjs'],
+    ['src/convergence.mjs','scripts/convergence.mjs'],
     ['templates/.codex/agents/feature_engineer.toml','.codex/agents/feature_engineer.toml'],
     ['templates/.claude/agents/feature-engineer.md','.claude/agents/feature-engineer.md'],
     ['templates/.opencode/agents/feature-engineer.md','.opencode/agents/feature-engineer.md'],
