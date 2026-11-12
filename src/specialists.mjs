@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { workerEnvironment } from './backends.mjs';
 import { extractUsage } from './usage.mjs';
@@ -17,6 +17,7 @@ const pathIn = (root, path) => {
   if (!existsSync(target) || !lstatSync(target).isFile()) throw new Error('Specialist referenced missing/nonregular file: ' + path);
   const base = realpathSync(root), real = realpathSync(target);
   if (!real.startsWith(base + sep)) throw new Error('Specialist reference escapes repository: ' + path);
+  if (statSync(real).size > 512 * 1024) throw new Error('Specialist reference too large: ' + path);
   return target;
 };
 const runGit = (cwd, args, maxBuffer = MAX_OUTPUT) => {
