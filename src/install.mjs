@@ -21,6 +21,7 @@ Keep shared XR/browser/headset sessions exclusive to one worker.
 Do not invent SDK APIs, overwrite unrelated work, or claim unexecuted tests.
 Do not push, merge or deploy without explicit approval.
 Conductor Mode is opt-in, requires --approve, and never bypasses provider isolation.
+Specialist explorer/fixer/checker roles are separately opt-in; model checks are advisory.
 Do not treat model-generated review notes as evidence or allow auto-integration.`;
 function mergeSection(original, body) {
   const section = `${managedStart}\n${body}\n${managedEnd}`;
@@ -67,6 +68,8 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
     ['src/conductor-ai.mjs','scripts/conductor-ai.mjs'],
     ['src/conductor.mjs','scripts/conductor.mjs'],
     ['src/evidence.mjs','scripts/evidence.mjs'],
+    ['src/specialists.mjs','scripts/specialists.mjs'],
+    ['src/specialist-conductor.mjs','scripts/specialist-conductor.mjs'],
     ['templates/.codex/agents/feature_engineer.toml','.codex/agents/feature_engineer.toml'],
     ['templates/.claude/agents/feature-engineer.md','.claude/agents/feature-engineer.md'],
     ['templates/.opencode/agents/feature-engineer.md','.opencode/agents/feature-engineer.md'],
