@@ -118,6 +118,12 @@ export async function conduct(cwd, id, flags = []) {
     const maxLoops = state.features.length * (cfg.maxRetriesPerFeature + 2) + 3;
     for (let cycle = 0; cycle < maxLoops; cycle++) {
       state = currentState(directory);
+      if (state.features.some(f => f.status === 'running')) {
+        // Reconcile detached workers even after the launch budget is exhausted.
+        // This does not run a provider or start a new worker.
+        await batchMain(['reconcile', id], repo);
+        state = currentState(directory);
+      }
       if (state.features.every(f => ['completed', 'collected'].includes(f.status))) break;
       if (Date.now() >= deadlineAt) {
         note(conductor, 'paused', 'Scheduling time limit reached; detached workers may still be running');
@@ -125,7 +131,10 @@ export async function conduct(cwd, id, flags = []) {
         return report(state, conductor);
       }
       if (remaining(state, cfg) <= 0) {
-        note(conductor, 'budget-exhausted', 'Total worker start limit reached');
+        const active = state.features.some(f => f.status === 'running');
+        note(conductor, active ? 'running' : 'budget-exhausted',
+          active ? 'Launch budget exhausted; existing workers remain active and can be reconciled later' :
+            'Total worker start limit reached');
         persist(state, conductor);
         return report(state, conductor);
       }
