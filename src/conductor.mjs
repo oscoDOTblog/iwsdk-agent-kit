@@ -2,6 +2,7 @@ import { existsSync, readFileSync, openSync, closeSync, writeFileSync, rmSync } 
 import { resolve, join } from 'node:path';
 import { run, atomic, ready, main as batchMain } from './orchestrator.mjs';
 import { readConductorConfig, DEFAULT_SPECIALISTS } from './conductor-config.mjs';
+import { validateContextConfig } from './context-config.mjs';
 import { plannerPrompt, verifierPrompt, runCoordinatorRole } from './conductor-ai.mjs';
 import { syncEvidence, saveEvidence, inspectEvidence } from './evidence.mjs';
 import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
@@ -72,6 +73,9 @@ function report(state, conductor) {
     evidence: { complete: ledger.complete, findings: ledger.findings },
     lastError: conductor.lastError,
     specialists: conductor.config.specialists.enabled ? specialistRuns(conductor) : { enabled: false },
+    contextLookups: conductor.config.specialists.context?.enabled ?
+      (conductor.contextLookups ?? []).map(c => ({ feature: c.feature, libraryId: c.libraryId,
+        status: c.status, reason: c.reason ?? null })) : [],
     caveat: 'No automatic integration, publishing, cross-provider failover, or proof of runtime acceptance.',
   };
 }
@@ -93,6 +97,7 @@ export async function conduct(cwd, id, flags = []) {
     let conductor = snapshot(state, config);
     const cfg = conductor.config; // Stable across resumptions; edit a new batch to change limits.
     cfg.specialists ??= { ...DEFAULT_SPECIALISTS, models: {} }; // Older v0.5 snapshots stay opt-out.
+    cfg.specialists.context ??= validateContextConfig(); // Older v0.6 snapshots stay opt-out.
     const workers = state.features.filter(f => ['pending', 'running'].includes(f.status))
       .map(f => f.backend ?? state.backend);
     const providers = [...workers, ...((cfg.aiPlanning || cfg.aiVerification ||
@@ -104,6 +109,10 @@ export async function conduct(cwd, id, flags = []) {
     enforceProviderIsolation(readProviderPolicy(repo), providers, flags, 'conduct');
     if (!state.conductor?.enabled) {
       state.conductor = { enabled: true, priority: state.features.map(f => f.id) };
+      atomic(statePath(state), state);
+    }
+    if (cfg.specialists.enabled && cfg.specialists.context.enabled) {
+      state.conductor.contextEnabled = true;
       atomic(statePath(state), state);
     }
     if (cfg.specialists.enabled && cfg.specialists.models.fixer) {
@@ -170,7 +179,7 @@ export async function conduct(cwd, id, flags = []) {
         const pending = ready(state);
         const next = pending.find(f => !specialistRuns(conductor).investigations[f.id]);
         if (next) {
-          if (!exploreFeature(state, conductor, cfg, next, persist, note)) return report(state, conductor);
+          if (!await exploreFeature(state, conductor, cfg, next, persist, note)) return report(state, conductor);
           continue;
         }
         if (pending.some(f => specialistRuns(conductor).investigations[f.id]?.status !== 'completed')) {
