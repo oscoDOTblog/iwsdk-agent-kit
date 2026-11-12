@@ -155,6 +155,10 @@ test('checker receives actual commit diff, deterministic tests and SHA-bound art
   assert.ok(existsSync(join(directory, 'conductor', 'checks', 'toy.json')));
   assert.equal(captureFeatureDiff(state, feature, 8).truncated, true);
   assert.throws(() => validateChecker(result.data, { ...diff, truncated: true }), /cannot pass/);
+  const callerFinding = { verdict: 'needs-human', summary: 'Caller may depend on behavior',
+    findings: [{ path: 'tests/feature.test.mjs', line: 1, severity: 'medium', detail: 'Review caller' }] };
+  assert.equal(validateChecker(callerFinding, diff, feature.worktree).findings[0].path, 'tests/feature.test.mjs');
+  assert.throws(() => validateChecker(callerFinding, diff), /verified caller/);
   assert.throws(() => validateChecker({ verdict: 'fail', summary: 'issue', findings: [
     { path: '../outside', line: 1, severity: 'high', detail: 'bad' },
   ] }, diff), /changed file/);
