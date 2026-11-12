@@ -2,7 +2,7 @@
 
 A reusable, project-aware multi-agent development workflow for Meta IWSDK projects. Run **Codex**, **Claude Code**, **OpenCode**, or **Meta Muse Code** independently. Feature workers use isolated Git worktrees, with explicit review and integration gates.
 
-> **Experimental v0.6.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
+> **Experimental v0.7.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
 
 ## Install into an existing IWSDK project
 
@@ -65,6 +65,19 @@ npm run agents:evidence -- my-batch
 
 See the [Conductor Mode guide](docs/conductor.md) for configuration,
 safety limitations, evidence commands, and upgrade instructions.
+
+## Optional Context-Aware Investigation (v0.7)
+
+Extends the opt-in specialist explorer and checker with an **offline,
+bounded import/caller impact map** and optional **version-aware Context7
+documentation lookups**. Only explicitly reviewed library queries may
+reach Context7; no source code is transmitted. Both features are disabled
+by default, and external docs require a separate API key and request cap.
+Documentation, caller maps and model reviews remain advisory; human
+acceptance, provider isolation, and manual publishing are unchanged.
+
+See [Context-Aware Investigation](docs/context-aware-investigation.md)
+for setup, version matching, privacy, and limitations.
 
 ## Optional Specialist Workers (v0.6)
 
