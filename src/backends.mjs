@@ -56,6 +56,9 @@ export function workerInvocation(value, feature, common, prompt, options = {}) {
 /** An independent Claude worker should not inherit its coordinator's session markers. */
 export function workerEnvironment(value, source = process.env) {
   const environment = { ...source };
+  // Context7 credentials belong to the conductor's explicit HTTP lookup,
+  // never to a spawned model, worker, reviewer, or nested CLI session.
+  delete environment.CONTEXT7_API_KEY;
   if (backendName(value) === 'claude') {
     delete environment.CLAUDECODE;
     delete environment.CLAUDE_CODE_ENTRYPOINT;
