@@ -291,3 +291,28 @@ test('reservation persists an in-flight role before a paid call and consumes its
   assert.equal(reserveSpecialist(state, conductor, config, 'explorer', feature,
     () => { throw new Error('should not persist again'); }), null);
 });
+
+test('resuming an interrupted checker never silently relaunches the model', async () => {
+  const { repo, state, feature, directory } = fixture();
+  const config = validateConductorConfig({ enabled: true, provider: 'codex',
+    aiPlanning: false, aiVerification: false,
+    specialists: { enabled: true, explore: false, check: true } });
+  writeFileSync(join(repo, 'iwsdk-agent-kit.config.json'), JSON.stringify({
+    backend: 'codex', providerIsolation: 'strict', conductor: config,
+  }));
+  feature.status = 'completed';
+  feature.attempt = 1;
+  state.backend = 'codex';
+  state.conductor = { enabled: true, priority: ['toy'] };
+  writeFileSync(join(directory, 'state.json'), JSON.stringify(state));
+  writeFileSync(join(directory, 'conductor.json'), JSON.stringify({
+    batch: 'demo', config, phase: 'checking', events: [], lastError: null,
+    plan: { data: { priority: ['toy'], risks: [], notes: 'Approved order' } },
+    specialistRuns: { calls: [{ role: 'checker', feature: 'toy', status: 'started' }],
+      investigations: {}, checks: { toy: { head: feature.head, status: 'started' } } },
+  }));
+  const report = await conduct(repo, 'demo', ['--approve']);
+  assert.equal(report.phase, 'specialist-blocked');
+  assert.equal(report.specialists.calls.length, 1);
+  assert.equal(report.specialists.checks.toy.status, 'started');
+});
