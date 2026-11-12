@@ -227,7 +227,7 @@ test('repair rejects dirty worktrees, started dependents, ownership changes and 
   const { unlinkSync } = await import('node:fs');
   unlinkSync(join(repo, 'untracked.txt'));
 
-  state.features.push({ id: 'dependent', status: 'running', dependsOn: ['toy'],
+  state.features.push({ id: 'dependent', status: 'completed', dependsOn: ['toy'],
     attempt: 0, backend: 'codex' });
   writeFileSync(join(directory, 'state.json'), JSON.stringify(state));
   await assert.rejects(main(['repair', 'demo', 'toy', '--approve'], repo), /Dependent feature already started/);
