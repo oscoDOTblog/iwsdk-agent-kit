@@ -11,6 +11,7 @@ import { buildDependencyGraph, impactForPaths, dependencyImpact, changedPathsFro
 import { installedVersion, queryContext7, normalizeContext7 } from '../src/context7-docs.mjs';
 import { prepareFeatureContext, featureContext, checkerDependencyContext } from '../src/context-enrichment.mjs';
 import { parseBatch } from '../src/orchestrator.mjs';
+import { workerEnvironment } from '../src/backends.mjs';
 
 function git(cwd, ...args) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -241,4 +242,14 @@ test('manual planning validates documentation specs but never invokes context or
   assert.throws(() => parseBatch({ ...batch, features: [{
     ...batch.features[0], docsRequests: [{ libraryId: 'http://internal', package: 'three', query: 'What is this?' }],
   }] }), /docsRequests/);
+});
+
+test('Context7 API key never propagates to any model subprocess', () => {
+  const env = { CONTEXT7_API_KEY: 'secret', HOME: '/tmp/home', CLAUDECODE: '1' };
+  for (const provider of ['claude', 'codex', 'opencode', 'muse']) {
+    const child = workerEnvironment(provider, env);
+    assert.equal(child.CONTEXT7_API_KEY, undefined);
+    assert.equal(child.HOME, '/tmp/home');
+  }
+  assert.equal(env.CONTEXT7_API_KEY, 'secret'); // Parent keeps it for the explicit HTTP lookup.
 });
