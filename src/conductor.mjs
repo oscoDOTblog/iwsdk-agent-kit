@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, openSync, closeSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { run, atomic, ready, main as batchMain } from './orchestrator.mjs';
-import { readConductorConfig } from './conductor-config.mjs';
+import { readConductorConfig, DEFAULT_SPECIALISTS } from './conductor-config.mjs';
 import { plannerPrompt, verifierPrompt, runCoordinatorRole } from './conductor-ai.mjs';
 import { syncEvidence, saveEvidence, inspectEvidence } from './evidence.mjs';
 import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
@@ -92,6 +92,7 @@ export async function conduct(cwd, id, flags = []) {
     let state = currentState(directory);
     let conductor = snapshot(state, config);
     const cfg = conductor.config; // Stable across resumptions; edit a new batch to change limits.
+    cfg.specialists ??= { ...DEFAULT_SPECIALISTS, models: {} }; // Older v0.5 snapshots stay opt-out.
     const workers = state.features.filter(f => ['pending', 'running'].includes(f.status))
       .map(f => f.backend ?? state.backend);
     const providers = [...workers, ...((cfg.aiPlanning || cfg.aiVerification ||
