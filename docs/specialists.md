@@ -8,14 +8,15 @@ ledger. **All specialist profiles are off by default.**
 
 - **Explorer:** read-only Claude (Read/Grep/Glob) or read-only-sandbox Codex.
   Returns JSON with a <=200-word summary, 1..12 existing relative source file
-  references (path, line, reason), and risks. References are verified before
+  references (path, line, reason), and risks. References are size-bounded and verified before
   saving. They are hints; the fixer must inspect its own worktree.
 - **Fixer:** the existing isolated feature worker. An optional model pin
   overrides the usual worker model only if the backend matches the conductor
   provider. Existing Git ownership, permissions, and start limits still apply.
 - **Checker:** a separate read-only model invocation (Read/Grep/Glob only for Claude) given the actual Git diff
   from feature.startHead to feature.head and deterministic targeted test
-  results. It returns advisory verdict and changed-file findings.
+  results. It can inspect callers using read-only tools and returns advisory
+  verdict and verified changed-file/caller findings.
 - **Targeted tests:** explicit per-feature test paths run with node --test PATH,
   without a shell, with timeout and saved logs. Model output cannot supply
   commands or select tests.
