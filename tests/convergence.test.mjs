@@ -243,3 +243,15 @@ test('repair rejects dirty worktrees, started dependents, ownership changes and 
   await assert.rejects(main(['repair', 'demo', 'toy', '--approve'], repo), /budget is exhausted/);
   assert.equal(JSON.parse(readFileSync(join(directory, 'state.json'), 'utf8')).features[0].status, 'completed');
 });
+
+test('missing modules are classified as environment failures, not auto-repaired', () => {
+  const { repo, state, feature, cfg } = fixture();
+  writeFileSync(join(repo, 'tests', 'missing.test.mjs'), "import 'uninstalled-iwsdk-test-package';\n");
+  feature.targetedTests = ['tests/missing.test.mjs'];
+  feature.regressionTests = [];
+  const tests = runTargetedTests(state, feature, 10);
+  assert.equal(tests[0].status, 'failed');
+  const feedback = failureReport(state, feature, tests);
+  assert.equal(feedback.infrastructure, true);
+  assert.match(canRepair(state, {}, feature, feedback, cfg).reason, /environment diagnosis/);
+});
