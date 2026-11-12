@@ -1,0 +1,193 @@
+import { existsSync, readFileSync, openSync, closeSync, writeFileSync, rmSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { run, atomic, main as batchMain } from './orchestrator.mjs';
+import { readConductorConfig } from './conductor-config.mjs';
+import { plannerPrompt, verifierPrompt, runCoordinatorRole } from './conductor-ai.mjs';
+import { syncEvidence, saveEvidence, inspectEvidence } from './evidence.mjs';
+import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
+
+const json = path => JSON.parse(readFileSync(path, 'utf8'));
+const conductorPath = state => join(state.directory, 'conductor.json');
+const statePath = state => join(state.directory, 'state.json');
+const started = state => state.features.reduce((count, f) => count + (f.attempt ?? 0), 0);
+const statuses = state => Object.fromEntries(state.features.map(f => [f.id, f.status]));
+function alive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+function withLock(directory, fn) {
+  const path = join(directory, 'conductor.lock');
+  if (existsSync(path)) {
+    const prior = json(path);
+    if (alive(prior.pid)) throw new Error('Conductor already running at PID ' + prior.pid);
+    rmSync(path);
+  }
+  const fd = openSync(path, 'wx');
+  writeFileSync(fd, JSON.stringify({ pid: process.pid }));
+  closeSync(fd);
+  return Promise.resolve().then(fn).finally(() => rmSync(path, { force: true }));
+}
+function location(cwd, id) {
+  if (!/^[a-z][a-z0-9-]{0,47}$/.test(id ?? '')) throw new Error('Supply a valid batch ID');
+  const repo = run('git', ['rev-parse', '--show-toplevel'], cwd);
+  const common = resolve(cwd, run('git', ['rev-parse', '--git-common-dir'], cwd));
+  const directory = join(common, 'agent-workflow', 'batches', id);
+  if (!existsSync(join(directory, 'state.json'))) throw new Error('Unknown batch: ' + id);
+  return { repo, directory };
+}
+function persist(state, conductor) {
+  atomic(conductorPath(state), conductor);
+}
+function currentState(directory) { return json(join(directory, 'state.json')); }
+function snapshot(state, cfg) {
+  const file = conductorPath(state);
+  if (existsSync(file)) return json(file);
+  return {
+    version: 1, batch: state.id, config: cfg, phase: 'initializing',
+    createdAt: new Date().toISOString(), plan: null, verification: null,
+    events: [], lastError: null,
+  };
+}
+function note(conductor, phase, detail) {
+  conductor.phase = phase;
+  conductor.updatedAt = new Date().toISOString();
+  conductor.events.push({ phase, at: conductor.updatedAt, detail });
+  conductor.events = conductor.events.slice(-100);
+}
+function retryable(feature, cfg) {
+  if (feature.status !== 'failed' || (feature.attempt ?? 0) > cfg.maxRetriesPerFeature) return false;
+  const error = feature.error ?? '';
+  if (/\b(?:quota|usage.limit|usage.cap|credits|rate.limit|permission|unauthorized|auth|denied|blocked)\b/i.test(error)) return false;
+  return /\b(?:ETIMEDOUT|ECONNRESET|EAI_AGAIN|temporar(?:y|ily)|timed? out)\b/i.test(error);
+}
+function remaining(state, cfg) { return cfg.maxWorkerStarts - started(state); }
+function report(state, conductor) {
+  const ledger = inspectEvidence(state);
+  return {
+    batch: state.id, mode: 'conductor', phase: conductor.phase,
+    provider: conductor.config.provider, workerStatuses: statuses(state),
+    workerStarts: started(state), maxWorkerStarts: conductor.config.maxWorkerStarts,
+    plan: conductor.plan, verification: conductor.verification,
+    evidence: { complete: ledger.complete, findings: ledger.findings },
+    lastError: conductor.lastError,
+    caveat: 'No automatic integration, publishing, cross-provider failover, or proof of runtime acceptance.',
+  };
+}
+export function conductorStatus(cwd, id) {
+  const { directory } = location(cwd, id);
+  const state = currentState(directory);
+  const path = conductorPath(state);
+  if (!existsSync(path)) return { batch: id, mode: 'manual', workerStatuses: statuses(state),
+    message: 'No conductor has been started for this batch' };
+  return report(state, json(path));
+}
+export async function conduct(cwd, id, flags = []) {
+  if (!flags.includes('--approve')) throw new Error('Conductor requires explicit --approve; no provider calls were made');
+  const { repo, directory } = location(cwd, id);
+  const config = readConductorConfig(repo);
+  if (!config.enabled) throw new Error('Conductor is disabled; set conductor.enabled=true to opt in');
+  return withLock(directory, async () => {
+    let state = currentState(directory);
+    let conductor = snapshot(state, config);
+    const cfg = conductor.config; // Stable across resumptions; edit a new batch to change limits.
+    const workers = state.features.filter(f => ['pending', 'running'].includes(f.status))
+      .map(f => f.backend ?? state.backend);
+    const providers = [...workers, ...((cfg.aiPlanning || cfg.aiVerification) ? [cfg.provider] : [])];
+    enforceProviderIsolation(readProviderPolicy(repo), providers, flags, 'conduct');
+    if (!state.conductor?.enabled) {
+      state.conductor = { enabled: true, priority: state.features.map(f => f.id) };
+      atomic(statePath(state), state);
+    }
+    if (!conductor.plan) {
+      note(conductor, 'planning', 'Preparing approved feature order');
+      persist(state, conductor);
+      if (cfg.aiPlanning) {
+        const result = runCoordinatorRole(state, cfg, 'planner', plannerPrompt(state));
+        conductor.plan = result;
+      } else {
+        conductor.plan = { data: { priority: state.features.map(f => f.id), risks: [], notes: 'Deterministic input order' },
+          provider: null, model: null, usage: null };
+      }
+      state = currentState(directory);
+      state.conductor.priority = conductor.plan.data.priority;
+      atomic(statePath(state), state);
+      note(conductor, 'planned', 'Planner may prioritize only approved features');
+      persist(state, conductor);
+    }
+    const deadlineAt = Date.now() + cfg.maxRunMinutes * 60_000;
+    const maxLoops = state.features.length * (cfg.maxRetriesPerFeature + 2) + 3;
+    for (let cycle = 0; cycle < maxLoops; cycle++) {
+      state = currentState(directory);
+      if (state.features.every(f => ['completed', 'collected'].includes(f.status))) break;
+      if (Date.now() >= deadlineAt) {
+        note(conductor, 'paused', 'Scheduling time limit reached; detached workers may still be running');
+        persist(state, conductor);
+        return report(state, conductor);
+      }
+      if (remaining(state, cfg) <= 0) {
+        note(conductor, 'budget-exhausted', 'Total worker start limit reached');
+        persist(state, conductor);
+        return report(state, conductor);
+      }
+      const failed = state.features.find(f => retryable(f, cfg));
+      if (failed) {
+        note(conductor, 'retrying', 'Retrying transient failure for ' + failed.id);
+        persist(state, conductor);
+        try { await batchMain(['retry', id, failed.id, ...flags], repo); }
+        catch (error) {
+          conductor.lastError = error.message;
+          note(conductor, 'needs-attention', 'Retry blocked by existing safety checks');
+          persist(state, conductor);
+          return report(currentState(directory), conductor);
+        }
+        continue;
+      }
+      const active = state.features.some(f => ['pending', 'running'].includes(f.status));
+      if (!active) break;
+      note(conductor, 'dispatching', 'Running existing bounded worker scheduler');
+      persist(state, conductor);
+      const before = started(state);
+      try {
+        await batchMain(['start', id, ...flags], repo, {
+          conductor: { maxStarts: remaining(state, cfg), maxConcurrency: cfg.maxParallelWorkers, deadlineAt },
+        });
+      } catch (error) {
+        conductor.lastError = error.message;
+      }
+      state = currentState(directory);
+      if (state.features.some(f => f.status === 'running')) {
+        note(conductor, 'running', 'Workers remain active; rerun conduct to resume monitoring');
+        persist(state, conductor);
+        return report(state, conductor);
+      }
+      if (started(state) === before && !state.features.some(f => retryable(f, cfg))) break;
+    }
+    state = currentState(directory);
+    if (!state.features.every(f => ['completed', 'collected'].includes(f.status))) {
+      note(conductor, 'needs-attention', 'Review failed, interrupted, blocked, or dependency-stalled features');
+      persist(state, conductor);
+      return report(state, conductor);
+    }
+    const ledger = syncEvidence(state);
+    saveEvidence(state, ledger);
+    const revision = state.features.map(f => f.id + ':' + f.head).join('|');
+    if (cfg.aiVerification && conductor.verification?.revision !== revision) {
+      note(conductor, 'verifying', 'Requesting advisory review; no acceptance items can be auto-approved');
+      persist(state, conductor);
+      try {
+        conductor.verification = { ...runCoordinatorRole(state, cfg, 'verifier', verifierPrompt(state, ledger)), revision };
+      } catch (error) {
+        conductor.lastError = error.message;
+        note(conductor, 'verification-blocked', 'Verifier failed; manual acceptance ledger remains available');
+        persist(state, conductor);
+        return report(state, conductor);
+      }
+    }
+    const evidence = inspectEvidence(state);
+    note(conductor, evidence.complete ? 'ready-for-collection' : 'awaiting-evidence',
+      evidence.complete ? 'All acceptance evidence is current; manual collection and review still required' :
+        'Record independent evidence for each criterion with agents:evidence');
+    persist(state, conductor);
+    return report(state, conductor);
+  });
+}
