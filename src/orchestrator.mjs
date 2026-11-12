@@ -152,6 +152,10 @@ function prompt(state, f) {
     baseline: state.baseline,
   });
 }
+export function resolveWorkerModel(state, backend) {
+  return (state.conductor?.fixerProvider === backend ? state.conductor?.fixerModel : null) ??
+    (state.promptSettings ?? readPromptSettings(state.repo)).workerModels[backend] ?? null;
+}
 async function worker(specPath) {
   const { state, feature: f, common, providerAuthorization } = json(specPath);
   const workerBackend = backendName(f.backend ?? state.backend);
@@ -170,8 +174,7 @@ async function worker(specPath) {
     const install = spawnSync('npm', ['ci', '--no-audit', '--no-fund'], { cwd: f.worktree, stdio: ['ignore', installLog, installLog] }); closeSync(installLog);
     if (install.status !== 0) fail(`npm ci failed (${install.status}); see worker log`);
     const backend = backendName(f.backend ?? state.backend);
-    const model = (state.conductor?.fixerProvider === backend ? state.conductor?.fixerModel : null) ??
-      (state.promptSettings ?? readPromptSettings(state.repo)).workerModels[backend] ?? null;
+    const model = resolveWorkerModel(state, backend);
     const invocation = workerInvocation(backend, f, common, prompt(state, f), { model });
     const code = await new Promise((resolveCode, reject) => {
       const child = spawn(invocation.command, invocation.args, { cwd: f.worktree, stdio: ['pipe', log, log], env: { ...workerEnvironment(backend), AGENT_WORKER_SPEC: specPath } });
