@@ -9,7 +9,7 @@ import { validateConductorConfig } from '../src/conductor-config.mjs';
 import { validateTargetedTests, validateInvestigation, investigationPrompt, investigationContext,
   specialistInvocation, runSpecialist, saveInvestigation, captureFeatureDiff,
   runTargetedTests, checkerPrompt, validateChecker, saveCheck } from '../src/specialists.mjs';
-import { specialistRuns, canInvoke } from '../src/specialist-conductor.mjs';
+import { specialistRuns, canInvoke, reserveSpecialist } from '../src/specialist-conductor.mjs';
 import { readBatchUsage } from '../src/usage.mjs';
 import { main, resolveWorkerModel } from '../src/orchestrator.mjs';
 import { conduct } from '../src/conductor.mjs';
@@ -273,4 +273,21 @@ test('specialist-only conductor still requires approval and explicit provider au
   const directory = join(repo, '.git', 'agent-workflow', 'batches', 'isolation');
   assert.equal(existsSync(join(directory, 'conductor', 'explorer')), false);
   assert.equal(existsSync(join(directory, 'conductor.json')), false);
+});
+
+test('reservation persists an in-flight role before a paid call and consumes its budget', () => {
+  const { state, feature } = fixture();
+  const conductor = {};
+  const config = validateConductorConfig({ specialists: {
+    enabled: true, maxCalls: 1, maxExplorerCalls: 1,
+  } });
+  let persisted = 0;
+  const call = reserveSpecialist(state, conductor, config, 'explorer', feature,
+    () => { persisted++; });
+  assert.equal(call.status, 'started');
+  assert.equal(persisted, 1);
+  assert.equal(conductor.specialistRuns.investigations.toy.status, 'started');
+  assert.equal(canInvoke(conductor, config, 'explorer'), false);
+  assert.equal(reserveSpecialist(state, conductor, config, 'explorer', feature,
+    () => { throw new Error('should not persist again'); }), null);
 });
