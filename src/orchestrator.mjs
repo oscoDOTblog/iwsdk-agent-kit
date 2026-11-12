@@ -13,6 +13,8 @@ import { writeReviewPrompt } from './review.mjs';
 import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
 import { recordEvidence, inspectEvidence } from './evidence.mjs';
 import { investigationContext, validateTargetedTests } from './specialists.mjs';
+import { validateDocsRequests } from './context-config.mjs';
+import { featureContext } from './context-enrichment.mjs';
 
 const self = fileURLToPath(import.meta.url);
 const fail = message => { throw new Error(message); };
@@ -63,6 +65,7 @@ export function parseBatch(input) {
     if (typeof f.contentChanges !== 'boolean' || typeof f.runtimeRequired !== 'boolean') fail(`${f.id}: contentChanges/runtimeRequired must be booleans`);
     if (f.backend !== undefined) f.backend = backendName(f.backend);
     if (f.targetedTests !== undefined) validateTargetedTests(f.targetedTests);
+    if (f.docsRequests !== undefined) validateDocsRequests(f.docsRequests);
     if (f.decisions !== undefined && (!Array.isArray(f.decisions) || !f.decisions.every(v => typeof v === 'string' && v.trim()))) {
       fail(f.id + ': decisions must be a list of confirmed non-empty strings');
     }
@@ -147,7 +150,7 @@ function prompt(state, f) {
   return buildWorkerPrompt({
     role,
     projectContext: sharedContext(state, budget.projectChars),
-    checkpoint: compactHandoffContext(state, f, budget.handoffChars) + investigationContext(state, f),
+    checkpoint: compactHandoffContext(state, f, budget.handoffChars) + investigationContext(state, f) + featureContext(state, f),
     feature: f,
     baseline: state.baseline,
   });
