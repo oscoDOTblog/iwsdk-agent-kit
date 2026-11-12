@@ -13,12 +13,16 @@ export function canInvoke(conductor, cfg, role) {
   return calls.length < cfg.specialists.maxCalls && calls.filter(c => c.role === role).length < limit;
 }
 
-function reserve(state, conductor, cfg, role, feature, persist) {
+export function reserveSpecialist(state, conductor, cfg, role, feature, persist) {
   if (!canInvoke(conductor, cfg, role)) return null;
   const call = { role, feature: feature.id, head: feature.head ?? state.baseline,
     status: 'started', at: new Date().toISOString() };
-  specialistRuns(conductor).calls.push(call);
-  // Persist before inference; a crash cannot silently repeat a paid call.
+  const runs = specialistRuns(conductor);
+  runs.calls.push(call);
+  const map = role === 'explorer' ? runs.investigations : runs.checks;
+  map[feature.id] = { head: feature.head ?? state.baseline, status: 'started' };
+  // Persist the in-flight role as well as the call before inference.
+  // A crash requires explicit review instead of silently repeating a paid call.
   persist(state, conductor);
   return call;
 }
@@ -34,7 +38,7 @@ function failure(state, conductor, role, feature, call, error, persist, note) {
 }
 
 export function exploreFeature(state, conductor, cfg, feature, persist, note) {
-  const call = reserve(state, conductor, cfg, 'explorer', feature, persist);
+  const call = reserveSpecialist(state, conductor, cfg, 'explorer', feature, persist);
   if (!call) {
     note(conductor, 'specialist-budget-exhausted', 'Explorer invocation limit reached');
     persist(state, conductor); return false;
@@ -74,7 +78,7 @@ export function checkFeature(state, conductor, cfg, feature, persist, note) {
       note(conductor, 'checker-needs-human', feature.id + ': tests left uncommitted changes');
       persist(state, conductor); return true;
     }
-    const call = reserve(state, conductor, cfg, 'checker', feature, persist);
+    const call = reserveSpecialist(state, conductor, cfg, 'checker', feature, persist);
     if (!call) return false;
     try {
       const result = runSpecialist(state, cfg, 'checker', feature, checkerPrompt(feature, diff, tests));
