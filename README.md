@@ -2,7 +2,7 @@
 
 A reusable, project-aware multi-agent development workflow for Meta IWSDK projects. Run **Codex**, **Claude Code**, **OpenCode**, or **Meta Muse Code** independently. Feature workers use isolated Git worktrees, with explicit review and integration gates.
 
-> **Experimental v0.3.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
+> **Experimental v0.4.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
 
 ## Install into an existing IWSDK project
 
@@ -18,7 +18,7 @@ The installer copies the runner into `scripts/`, installs project-local agent de
 
 **Provider isolation is now strict by default.** The kit uses the `backend` from your project's `iwsdk-agent-kit.config.json` (normally `codex`) and blocks unexpected Claude/OpenCode/Muse workers at **plan and start**, including existing batches. To switch your default, edit that config; for a one-off cross-provider run, explicitly authorize the named backend at both steps. See [provider isolation](docs/provider-isolation.md).
 
-**Already using the kit?** Re-run the same install command above to update the GitHub dependency, then run `npx iwsdk-agent-kit init --dry-run` and `npx iwsdk-agent-kit init` to install the updated scripts and Muse role. Review conflicts and commit the intended changes.
+**Already using the kit?** Re-run the install command to update the GitHub dependency, then inspect `npx iwsdk-agent-kit init --dry-run`. The installer overwrites managed runner scripts after backing them up; **do not run `init` blindly in a project with custom worker/sandbox code**. Review the diff and commit only the intended changes.
 
 ## Use one coding CLI per batch
 
@@ -35,6 +35,25 @@ npm run agents:publish -- example-batch --approve
 ```
 
 To use `claude`, `opencode` or `muse` by default, first change `backend` in `iwsdk-agent-kit.config.json` to that provider. An unexpected provider is blocked unless the command includes `--allow-cross-provider BACKEND --approve`. The batch has a default backend, but an explicitly reviewed handoff can reassign a **stopped** feature to another CLI. Running `publish` pushes an integration branch and creates a PR; it never merges the PR.
+
+## Token efficiency and usage reporting (v0.4)
+
+New optional commands work without launching an AI worker:
+
+```bash
+npm run agents:usage -- example-batch
+npm run agents:usage -- example-batch --json
+npm run agents:cache-audit
+npm run agents:review-prompt -- example-batch pickup
+```
+
+- **Usage:** parses locally reported token/cache metrics per provider and feature attempt. Unknown data remains `n/a`; it cannot read subscription quotas or billable cost.
+- **Cache-friendly prompts:** stable role/project prefix, dynamic task details last, bounded project context and compact checkpoints.
+- **Model pinning:** optionally set `workerModels` for Codex, Claude or OpenCode in `iwsdk-agent-kit.config.json`. Models are snapshotted at planning and fixed for each attempt; Muse pins are not yet supported.
+- **Read-only cache audit:** identifies potential Claude settings/skill/MCP cache breakers without changing permissions or revealing endpoint values.
+- **Isolated review prompts:** generates a separate, bounded review assignment for you to run in a new CLI session. It does not launch another provider or replace the normal review gates.
+
+See the [token efficiency guide](docs/token-efficiency.md) for configuration, limitations and examples.
 
 ## Muse Code and quota handoffs
 
@@ -78,5 +97,6 @@ See [handoff and upgrade guide](docs/handoff.md) and [provider isolation policy]
 - The workflow requires Linux, macOS or WSL; native Windows is not tested.
 - The installer does not overwrite existing agent definition files; review reported conflicts. It backs up changed managed scripts and instructions.
 - The package is not yet an npm registry release and the toolkit has not been tested with authenticated live AI workers, including Muse.
+- Token parsing and cache audit behavior are best-effort and CLI-version-dependent; unknown metrics are not evidence of zero usage.
 
 See [security](docs/security.md) and [architecture](docs/architecture.md). MIT licensed.
