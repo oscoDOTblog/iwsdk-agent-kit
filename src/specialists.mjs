@@ -8,7 +8,8 @@ import { extractUsage } from './usage.mjs';
 const MAX_OUTPUT = 8 * 1024 * 1024;
 const digest = value => createHash('sha256').update(value).digest('hex');
 const safePath = path => typeof path === 'string' && path.length > 0 && path.length < 300 &&
-  !isAbsolute(path) && !path.includes('\\') && !path.split('/').some(p => !p || p === '.' || p === '..');
+  !isAbsolute(path) && /^[A-Za-z0-9._/-]+$/.test(path) && !path.includes('\\') &&
+  !path.split('/').some(p => !p || p === '.' || p === '..');
 const small = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 const pathIn = (root, path) => {
   if (!safePath(path)) throw new Error('Specialist file reference must be a safe relative path');
