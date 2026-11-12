@@ -73,6 +73,16 @@ export function summarizeUsage(attempts) {
   });
   return { groups, attempts };
 }
+export function summarizeRoleUsage(rows) {
+  return [...new Set(rows.map(row => row.role))].map(role => {
+    const entries = rows.filter(row => row.role === role);
+    const totals = Object.fromEntries(METRICS.map(key => [key, sum(entries.map(e => e.usage ?? empty()), key)]));
+    const partialMetrics = METRICS.filter(key => entries.some(e => (e.usage ?? empty())[key] === null));
+    return { role, calls: entries.length, measuredCalls: entries.filter(e =>
+      METRICS.some(key => (e.usage ?? empty())[key] !== null)).length,
+      ...totals, partialMetrics };
+  });
+}
 export function readBatchUsage(state, { maxLogBytes = 16 * 1024 * 1024 } = {}) {
   const attempts = [];
   for (const feature of state.features) for (let attempt = 1; attempt <= (feature.attempt ?? 0); attempt++) {
@@ -92,10 +102,31 @@ export function readBatchUsage(state, { maxLogBytes = 16 * 1024 * 1024 } = {}) {
         note = METRICS.some(k => usage[k] !== null) ? 'reported' : 'CLI usage unavailable';
       }
     }
-    attempts.push({ feature: feature.id, attempt, backend, model: feature.model ?? state.promptSettings?.workerModels?.[backend] ?? null,
+    attempts.push({ feature: feature.id, attempt, backend, model: feature.model ??
+      (state.conductor?.fixerProvider === backend ? state.conductor?.fixerModel : null) ??
+      state.promptSettings?.workerModels?.[backend] ?? null,
       status: attempt === feature.attempt ? feature.status : 'previous attempt', usage, note });
   }
+  let roles;
+  const conductorPath = join(state.directory, 'conductor.json');
+  if (existsSync(conductorPath)) {
+    try {
+      const conductor = JSON.parse(readFileSync(conductorPath, 'utf8'));
+      if (conductor.config?.specialists?.enabled) {
+        const rows = attempts.map(a => ({ ...a, role: 'fixer' }));
+        for (const [role, result] of [['planner', conductor.plan], ['verifier', conductor.verification]]) {
+          if (result?.provider) rows.push({ role, backend: result.provider, usage: result.usage ?? empty() });
+        }
+        for (const call of conductor.specialistRuns?.calls ?? []) {
+          rows.push({ role: call.role, backend: call.provider ?? conductor.config.provider,
+            usage: call.usage ?? empty() });
+        }
+        roles = summarizeRoleUsage(rows);
+      }
+    } catch { /* preserve manual usage even when conductor metadata is unreadable */ }
+  }
   return { batch: state.id, generatedAt: new Date().toISOString(), ...summarizeUsage(attempts),
+    ...(roles ? { roles } : {}),
     caveat: 'Metrics come from local CLI logs. A + suffix means partial observed tokens, not a complete total; n/a means unknown. No subscription quota or billing balance is available.' };
 }
 const display = value => value === null || value === undefined ? 'n/a' : value.toLocaleString('en-US');
@@ -108,7 +139,13 @@ export function formatUsageReport(report) {
       g.cacheHitRatio === null ? 'n/a' : (g.cacheHitRatio * 100).toFixed(1) + '%']),
   ];
   const widths = rows[0].map((_, i) => Math.max(...rows.map(row => row[i].length)));
+  const roles = report.roles?.length ? [
+    '', 'Role usage (observed; unknown values are not zero):',
+    ...report.roles.map(r => r.role + ': ' + r.calls + ' calls, ' + r.measuredCalls +
+      ' measured; input=' + display(r.inputTokens) + ', output=' + display(r.outputTokens) +
+      (r.partialMetrics.length ? ' (partial)' : '')),
+  ] : [];
   return ['Batch: ' + report.batch, rows.map(row => row.map((value, i) => value.padEnd(widths[i])).join('  ')).join('\n'),
     '', ...report.attempts.filter(a => a.note !== 'reported').map(a => a.feature + ' #' + a.attempt + ' (' + a.backend + '): ' + a.note),
-    '', report.caveat].join('\n');
+    ...roles, '', report.caveat].join('\n');
 }
