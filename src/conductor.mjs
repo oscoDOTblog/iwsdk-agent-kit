@@ -72,8 +72,8 @@ function report(state, conductor) {
     plan: conductor.plan, verification: conductor.verification,
     evidence: { complete: ledger.complete, findings: ledger.findings },
     lastError: conductor.lastError,
-    specialists: conductor.config.specialists.enabled ? specialistRuns(conductor) : { enabled: false },
-    contextLookups: conductor.config.specialists.context?.enabled ?
+    specialists: conductor.config.specialists?.enabled ? specialistRuns(conductor) : { enabled: false },
+    contextLookups: conductor.config.specialists?.context?.enabled ?
       (conductor.contextLookups ?? []).map(c => ({ feature: c.feature, libraryId: c.libraryId,
         status: c.status, reason: c.reason ?? null })) : [],
     caveat: 'No automatic integration, publishing, cross-provider failover, or proof of runtime acceptance.',
