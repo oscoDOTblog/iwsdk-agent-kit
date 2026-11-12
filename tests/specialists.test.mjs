@@ -166,7 +166,7 @@ test('failed targeted tests are recorded, never reported as passing evidence', (
     "import test from 'node:test'; test('expected failure', () => { throw new Error('intentional'); });\n");
   feature.targetedTests = ['tests/failure.test.mjs'];
   const tests = runTargetedTests(state, feature, 20);
-  assert.equal(tests[0].status, 'failed');
+  assert.equal(tests[0].status, 'failed', readFileSync(join(state.directory, tests[0].log), 'utf8'));
   assert.equal(tests[0].head, feature.head);
   const diff = captureFeatureDiff(state, feature, 16000);
   const saved = saveCheck(state, feature, diff, tests, { data: {
