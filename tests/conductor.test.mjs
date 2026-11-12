@@ -178,6 +178,25 @@ test('conductor is resumable and never self-approves acceptance or integrates', 
   assert.equal(inspectEvidence(JSON.parse(readFileSync(statePath, 'utf8'))).complete, false);
   await assert.rejects(main(['integrate', 'demo', '--approve'], root), /evidence is missing or stale/);
 });
+test('resume reconciles an already-running worker without a second launch after budget exhaustion', async () => {
+  const root = project({ maxWorkerStarts: 1 });
+  const { statePath } = await plan(root);
+  const state = finishFeature(root, statePath);
+  const f = state.features[0];
+  f.status = 'running';
+  f.pid = process.pid; // Simulates a still-alive detached worker wrapper.
+  writeFileSync(statePath, JSON.stringify(state));
+  const active = await conduct(root, 'demo', ['--approve']);
+  assert.equal(active.phase, 'running');
+  assert.equal(active.workerStarts, 1);
+  writeFileSync(join(f.attemptDirectory, 'receipt.json'), JSON.stringify({
+    status: 'completed', head: f.head, endedAt: new Date().toISOString(),
+  }));
+  const resumed = await conduct(root, 'demo', ['--approve']);
+  assert.equal(resumed.phase, 'awaiting-evidence');
+  assert.equal(resumed.workerStarts, 1);
+  assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).features[0].status, 'completed');
+});
 test('evidence cannot be forged with missing artifacts, changed commits, or path escapes', () => {
   const root = project();
   const state = { id: 'demo', directory: join(root, '.git'), features: [
