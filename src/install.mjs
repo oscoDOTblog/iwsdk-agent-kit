@@ -22,6 +22,7 @@ Do not invent SDK APIs, overwrite unrelated work, or claim unexecuted tests.
 Do not push, merge or deploy without explicit approval.
 Conductor Mode is opt-in, requires --approve, and never bypasses provider isolation.
 Specialist explorer/fixer/checker roles are separately opt-in; model checks are advisory.
+Optional context mapping is offline; Context7 calls require an explicit reviewed library query and API key.
 Do not treat model-generated review notes as evidence or allow auto-integration.`;
 function mergeSection(original, body) {
   const section = `${managedStart}\n${body}\n${managedEnd}`;
@@ -70,6 +71,10 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
     ['src/evidence.mjs','scripts/evidence.mjs'],
     ['src/specialists.mjs','scripts/specialists.mjs'],
     ['src/specialist-conductor.mjs','scripts/specialist-conductor.mjs'],
+    ['src/context-config.mjs','scripts/context-config.mjs'],
+    ['src/context7-docs.mjs','scripts/context7-docs.mjs'],
+    ['src/dependency-map.mjs','scripts/dependency-map.mjs'],
+    ['src/context-enrichment.mjs','scripts/context-enrichment.mjs'],
     ['templates/.codex/agents/feature_engineer.toml','.codex/agents/feature_engineer.toml'],
     ['templates/.claude/agents/feature-engineer.md','.claude/agents/feature-engineer.md'],
     ['templates/.opencode/agents/feature-engineer.md','.opencode/agents/feature-engineer.md'],
