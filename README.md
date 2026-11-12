@@ -2,7 +2,7 @@
 
 A reusable, project-aware multi-agent development workflow for Meta IWSDK projects. Run **Codex**, **Claude Code**, **OpenCode**, or **Meta Muse Code** independently. Feature workers use isolated Git worktrees, with explicit review and integration gates.
 
-> **Experimental v0.5.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
+> **Experimental v0.6.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
 
 ## Install into an existing IWSDK project
 
@@ -65,6 +65,18 @@ npm run agents:evidence -- my-batch
 
 See the [Conductor Mode guide](docs/conductor.md) for configuration,
 safety limitations, evidence commands, and upgrade instructions.
+
+## Optional Specialist Workers (v0.6)
+
+An additional opt-in layer for Conductor Mode separates read-only code
+exploration, isolated feature implementation, and independent diff review.
+It can run explicitly listed Node test files after completed patches, retain
+commit-bound test logs, and report token usage by role. All specialist
+profiles default to disabled. Existing provider isolation, manual acceptance
+evidence, and publishing gates remain unchanged.
+
+See the [Specialist Workers guide](docs/specialists.md) for configuration,
+test-file allowlisting, model restrictions, call limits and limitations.
 
 ## Token efficiency and usage reporting (v0.4)
 
