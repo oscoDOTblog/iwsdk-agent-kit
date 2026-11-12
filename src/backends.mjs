@@ -20,18 +20,23 @@ const CLAUDE_TOOLS = [
   'Bash(npm test)', 'Bash(npm run build)', 'Bash(npm run generator:report)',
   'Bash(rg *)', 'Bash(ls *)',
 ];
-export function workerInvocation(value, feature, common, prompt) {
+export function workerInvocation(value, feature, common, prompt, options = {}) {
   const backend = backendName(value);
+  const model = options.model ?? null;
+  if (model !== null && (typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,127}$/.test(model))) {
+    throw new Error('Invalid model identifier');
+  }
+  if (backend === 'muse' && model) throw new Error('Model pinning for Muse is not verified');
   if (backend === 'codex') return {
     command: 'codex',
-    args: ['exec', '--strict-config', '--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'agents.enabled=false',
+    args: ['exec', ...(model ? ['-m', model] : []), '--strict-config', '--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'agents.enabled=false',
       '--add-dir', common, '--cd', feature.worktree, '--json',
       '--output-last-message', `${feature.attemptDirectory}/summary.md`, '-'],
     stdin: prompt,
   };
   if (backend === 'claude') return {
     command: 'claude',
-    args: ['-p', '--agent', 'feature-engineer', '--output-format', 'json', '--permission-mode', 'dontAsk',
+    args: ['-p', ...(model ? ['--model', model] : []), '--agent', 'feature-engineer', '--output-format', 'json', '--permission-mode', 'dontAsk',
       '--allowedTools', ...CLAUDE_TOOLS, '--disallowedTools', 'mcp__*'],
     stdin: prompt,
   };
@@ -44,7 +49,7 @@ export function workerInvocation(value, feature, common, prompt) {
   // OpenCode agent grants only listed commands. Do not use --auto.
   return {
     command: 'opencode',
-    args: ['run', '--agent', 'feature-engineer', '--format', 'json', prompt],
+    args: ['run', ...(model ? ['--model', model] : []), '--agent', 'feature-engineer', '--format', 'json', prompt],
     stdin: '',
   };
 }
