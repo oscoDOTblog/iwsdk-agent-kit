@@ -208,8 +208,8 @@ export async function conduct(cwd, id, flags = []) {
       for (const feature of state.features) {
         const prior = specialistRuns(conductor).checks[feature.id];
         if (prior?.head === feature.head) {
-          if (prior.status === 'failed') {
-            note(conductor, 'specialist-blocked', 'Previous checker failure needs explicit review');
+          if (prior.status === 'failed' || prior.status === 'started') {
+            note(conductor, 'specialist-blocked', 'Previous checker invocation was interrupted or failed; explicit review required');
             persist(state, conductor); return report(state, conductor);
           }
           continue;
