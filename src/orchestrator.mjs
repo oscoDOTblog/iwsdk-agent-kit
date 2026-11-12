@@ -15,6 +15,7 @@ import { recordEvidence, inspectEvidence } from './evidence.mjs';
 import { investigationContext, validateTargetedTests } from './specialists.mjs';
 import { validateDocsRequests } from './context-config.mjs';
 import { featureContext } from './context-enrichment.mjs';
+import { repairContext } from './convergence.mjs';
 
 const self = fileURLToPath(import.meta.url);
 const fail = message => { throw new Error(message); };
@@ -65,6 +66,12 @@ export function parseBatch(input) {
     if (typeof f.contentChanges !== 'boolean' || typeof f.runtimeRequired !== 'boolean') fail(`${f.id}: contentChanges/runtimeRequired must be booleans`);
     if (f.backend !== undefined) f.backend = backendName(f.backend);
     if (f.targetedTests !== undefined) validateTargetedTests(f.targetedTests);
+    if (f.regressionTests !== undefined) {
+      const regression = validateTargetedTests(f.regressionTests);
+      if (regression.length > 4 || regression.some(p => !(f.targetedTests ?? []).includes(p))) {
+        fail(f.id + ': regressionTests must contain at most four paths already listed in targetedTests');
+      }
+    }
     if (f.docsRequests !== undefined) validateDocsRequests(f.docsRequests);
     if (f.decisions !== undefined && (!Array.isArray(f.decisions) || !f.decisions.every(v => typeof v === 'string' && v.trim()))) {
       fail(f.id + ': decisions must be a list of confirmed non-empty strings');
@@ -150,7 +157,7 @@ function prompt(state, f) {
   return buildWorkerPrompt({
     role,
     projectContext: sharedContext(state, budget.projectChars),
-    checkpoint: compactHandoffContext(state, f, budget.handoffChars) + investigationContext(state, f) + featureContext(state, f),
+    checkpoint: compactHandoffContext(state, f, budget.handoffChars) + investigationContext(state, f) + featureContext(state, f) + repairContext(state, f),
     feature: f,
     baseline: state.baseline,
   });
@@ -193,7 +200,7 @@ async function worker(specPath) {
     if (backend !== 'codex') writeFileSync(summary, parseWorkerResult(backend, readFileSync(join(f.attemptDirectory, 'worker.jsonl'), 'utf8')));
     if (!existsSync(summary) || /\bBLOCKED\b/.test(readFileSync(summary, 'utf8'))) fail('Worker missing summary or reported BLOCKED');
     const head = git(f.worktree, 'rev-parse', 'HEAD');
-    if (!clean(f.worktree) || head === f.startHead) fail('Worker must leave clean committed changes');
+    if (!clean(f.worktree) || head === (f.repairBaseHead ?? f.startHead)) fail('Worker must leave clean NEW committed changes');
     result = { status: 'completed', head, endedAt: new Date().toISOString() };
   } catch (e) { result = { status: 'failed', error: e.message, endedAt: new Date().toISOString() }; }
   finally { closeSync(log); }
@@ -280,6 +287,57 @@ async function start(ctx, state, flags, options = {}) {
     fail('Batch incomplete; inspect status and logs before retry');
   }
 }
+function repair(ctx, state, flags) {
+  approved(flags);
+  const feature = state.features.find(f => f.id === flags[0]);
+  if (!feature || feature.status !== 'completed' || !feature.head || !state.conductor?.convergenceEnabled) {
+    fail('Repair requires a completed feature in an explicitly opted-in convergence batch');
+  }
+  const conductorFile = join(state.directory, 'conductor.json');
+  if (!existsSync(conductorFile)) fail('Conductor snapshot required before repair');
+  const snapshot = json(conductorFile);
+  const cfg = snapshot.config;
+  if (!cfg?.convergence?.enabled || (feature.repairCount ?? 0) >= cfg.convergence.maxRepairsPerFeature) {
+    fail('Repair is disabled or its per-feature budget is exhausted');
+  }
+  if (state.features.reduce((n, f) => n + (f.attempt ?? 0), 0) >= cfg.maxWorkerStarts) {
+    fail('Total worker start budget exhausted');
+  }
+  if (state.features.some(f => f.dependsOn.includes(feature.id) && f.status !== 'pending')) {
+    fail('Dependent feature already started; repair requires manual coordination');
+  }
+  if (state.integration || state.collection || existsSync(join(state.directory, 'review.json'))) {
+    fail('Cannot repair after collection/review/integration has begun');
+  }
+  if (!existsSync(feature.worktree) || !clean(feature.worktree) ||
+      git(feature.worktree, 'branch', '--show-current') !== feature.branch ||
+      git(feature.worktree, 'rev-parse', 'HEAD') !== feature.head) {
+    fail('Repair requires the unchanged clean feature branch at its recorded commit');
+  }
+  const files = git(feature.worktree, 'diff', '--name-only', feature.startHead, feature.head).split('\n').filter(Boolean);
+  if (!files.length || files.some(path => !owns(feature, path))) fail('Repair blocked by ownership violation or empty patch');
+  const feedbackFile = join(state.directory, 'conductor', 'feedback', feature.id + '.json');
+  if (!existsSync(feedbackFile)) fail('Deterministic feedback required for repair');
+  const feedback = json(feedbackFile);
+  if (feedback.head !== feature.head || feedback.feature !== feature.id ||
+      feedback.status !== 'failed' || feedback.repeated || !/^[a-f0-9]{64}$/.test(feedback.fingerprint) ||
+      !Array.isArray(feedback.failures) || !feedback.failures.length) {
+    fail('Repair feedback missing, stale, repeated, or invalid');
+  }
+  const history = snapshot.convergenceRuns?.[feature.id]?.observations ?? [];
+  if (!history.some(h => h.head === feature.head && h.fingerprint === feedback.fingerprint)) {
+    fail('Repair requires a persisted deterministic failure observation');
+  }
+  enforceProviderIsolation(readProviderPolicy(ctx.repo), [feature.backend ?? state.backend], flags, 'repair');
+  writeHandoff(state, feature);
+  feature.repairBaseHead = feature.head;
+  feature.repairCount = (feature.repairCount ?? 0) + 1;
+  feature.status = 'pending';
+  delete feature.error;
+  console.log('Queued bounded repair ' + feature.repairCount + ' for ' + feature.id +
+    '; the next approved conductor invocation may start a worker.');
+}
+
 function collect(state) {
   if (state.conductor?.enabled && !inspectEvidence(state).complete) {
     fail('Conductor batch requires current acceptance evidence for every criterion before collection');
@@ -441,6 +499,7 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd(), op
         console.log(JSON.stringify(result, null, 2));
         break;
       }
+      case 'repair': repair(ctx, state, flags); break;
       case 'collect': collect(state); break;
       case 'integrate': approved(flags); integration(state); break;
       case 'publish': approved(flags); publish(state); break;
@@ -483,7 +542,7 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd(), op
         }
         f.status = 'pending'; delete f.error; break;
       }
-      default: fail('Commands: plan FILE | start/conduct/conduct-status/status/usage/evidence/collect/integrate/publish/cleanup ID | evidence ID FEATURE CRITERION --status passed --kind test --artifact FILE --note TEXT --approve | review-prompt ID FEATURE | checkpoint ID [FEATURE] | handoff/retry ID FEATURE --approve. Cross-provider: --allow-cross-provider BACKEND --approve.');
+      default: fail('Commands: plan FILE | start/conduct/conduct-status/status/usage/evidence/collect/integrate/publish/cleanup ID | evidence ID FEATURE CRITERION --status passed --kind test --artifact FILE --note TEXT --approve | review-prompt ID FEATURE | checkpoint ID [FEATURE] | handoff/retry ID FEATURE --approve | repair ID FEATURE --approve (opt-in convergence only). Cross-provider: --allow-cross-provider BACKEND --approve.');
     }
   });
 }
