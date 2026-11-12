@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { backendName } from './backends.mjs';
 import { validateModelPin } from './prompt.mjs';
+import { DEFAULT_CONTEXT, validateContextConfig } from './context-config.mjs';
 
 export const DEFAULT_SPECIALISTS = Object.freeze({
   enabled: false,
@@ -13,6 +14,7 @@ export const DEFAULT_SPECIALISTS = Object.freeze({
   maxCheckerCalls: 6,
   maxDiffChars: 16000,
   maxTestSeconds: 30,
+  context: DEFAULT_CONTEXT,
 });
 export const DEFAULT_CONDUCTOR = Object.freeze({
   enabled: false,
@@ -81,7 +83,8 @@ export function validateConductorConfig(input = {}) {
     if (!['explorer', 'fixer', 'checker'].includes(role)) throw new Error('Unsupported specialist model role: ' + role);
     validateModelPin(cfg.provider, model);
   }
-  return { ...cfg, models: { ...cfg.models }, specialists: { ...specialists, models: { ...specialists.models } } };
+  return { ...cfg, models: { ...cfg.models }, specialists: { ...specialists,
+    models: { ...specialists.models }, context: validateContextConfig(specialists.context) } };
 }
 export function readConductorConfig(repo) {
   const path = join(repo, 'iwsdk-agent-kit.config.json');
