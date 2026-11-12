@@ -2,7 +2,7 @@
 
 A reusable, project-aware multi-agent development workflow for Meta IWSDK projects. Run **Codex**, **Claude Code**, **OpenCode**, or **Meta Muse Code** independently. Feature workers use isolated Git worktrees, with explicit review and integration gates.
 
-> **Experimental v0.7.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
+> **Experimental v0.8.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
 
 ## Install into an existing IWSDK project
 
@@ -65,6 +65,18 @@ npm run agents:evidence -- my-batch
 
 See the [Conductor Mode guide](docs/conductor.md) for configuration,
 safety limitations, evidence commands, and upgrade instructions.
+
+## Optional Convergence Loop (v0.8)
+
+Conductor's separately opt-in **Convergence Loop** captures commit-bound
+red-to-green regression tests (for unchanged, pre-existing tests), converts
+deterministic test failures into compact expected/observed feedback, and
+stops after repeated identical failures. It may queue a bounded repair
+on the same isolated feature branch, but never auto-integrates, publishes,
+approves evidence, switches providers, or bypasses worktree ownership.
+
+**Disabled by default**. See [Convergence Loop](docs/convergence.md)
+for the required configuration, limitations, and commands.
 
 ## Optional Context-Aware Investigation (v0.7)
 
