@@ -320,7 +320,7 @@ function repair(ctx, state, flags) {
   if (!existsSync(feedbackFile)) fail('Deterministic feedback required for repair');
   const feedback = json(feedbackFile);
   if (feedback.head !== feature.head || feedback.feature !== feature.id ||
-      feedback.status !== 'failed' || feedback.repeated || !/^[a-f0-9]{64}$/.test(feedback.fingerprint) ||
+      feedback.status !== 'failed' || feedback.repeated || feedback.infrastructure || !/^[a-f0-9]{64}$/.test(feedback.fingerprint) ||
       !Array.isArray(feedback.failures) || !feedback.failures.length) {
     fail('Repair feedback missing, stale, repeated, or invalid');
   }
