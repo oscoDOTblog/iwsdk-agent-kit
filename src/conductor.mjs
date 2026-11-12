@@ -1,12 +1,13 @@
 import { existsSync, readFileSync, openSync, closeSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { run, atomic, ready, main as batchMain } from './orchestrator.mjs';
-import { readConductorConfig, DEFAULT_SPECIALISTS } from './conductor-config.mjs';
+import { readConductorConfig, DEFAULT_SPECIALISTS, validateConvergenceConfig } from './conductor-config.mjs';
 import { validateContextConfig } from './context-config.mjs';
 import { plannerPrompt, verifierPrompt, runCoordinatorRole } from './conductor-ai.mjs';
 import { syncEvidence, saveEvidence, inspectEvidence } from './evidence.mjs';
 import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
 import { specialistRuns, exploreFeature, checkFeature } from './specialist-conductor.mjs';
+import { observeFailure, canRepair } from './convergence.mjs';
 
 const json = path => JSON.parse(readFileSync(path, 'utf8'));
 const conductorPath = state => join(state.directory, 'conductor.json');
@@ -73,6 +74,14 @@ function report(state, conductor) {
     evidence: { complete: ledger.complete, findings: ledger.findings },
     lastError: conductor.lastError,
     specialists: conductor.config.specialists?.enabled ? specialistRuns(conductor) : { enabled: false },
+    convergence: conductor.config.convergence?.enabled ? {
+      enabled: true,
+      maxRepairsPerFeature: conductor.config.convergence.maxRepairsPerFeature,
+      features: Object.fromEntries(state.features.map(f => [f.id, {
+        repairs: f.repairCount ?? 0,
+        failures: conductor.convergenceRuns?.[f.id]?.observations?.length ?? 0,
+      }])),
+    } : { enabled: false },
     contextLookups: conductor.config.specialists?.context?.enabled ?
       (conductor.contextLookups ?? []).map(c => ({ feature: c.feature, libraryId: c.libraryId,
         status: c.status, reason: c.reason ?? null })) : [],
@@ -98,6 +107,7 @@ export async function conduct(cwd, id, flags = []) {
     const cfg = conductor.config; // Stable across resumptions; edit a new batch to change limits.
     cfg.specialists ??= { ...DEFAULT_SPECIALISTS, models: {} }; // Older v0.5 snapshots stay opt-out.
     cfg.specialists.context ??= validateContextConfig(); // Older v0.6 snapshots stay opt-out.
+    cfg.convergence ??= validateConvergenceConfig(); // Older v0.7 snapshots stay opt-out.
     const workers = state.features.filter(f => ['pending', 'running'].includes(f.status))
       .map(f => f.backend ?? state.backend);
     const providers = [...workers, ...((cfg.aiPlanning || cfg.aiVerification ||
@@ -109,6 +119,10 @@ export async function conduct(cwd, id, flags = []) {
     enforceProviderIsolation(readProviderPolicy(repo), providers, flags, 'conduct');
     if (!state.conductor?.enabled) {
       state.conductor = { enabled: true, priority: state.features.map(f => f.id) };
+      atomic(statePath(state), state);
+    }
+    if (cfg.convergence.enabled) {
+      state.conductor.convergenceEnabled = true;
       atomic(statePath(state), state);
     }
     if (cfg.specialists.enabled && cfg.specialists.context.enabled) {
@@ -228,6 +242,41 @@ export async function conduct(cwd, id, flags = []) {
           persist(state, conductor); return report(state, conductor);
         }
         if (!checkFeature(state, conductor, cfg, feature, persist, note)) return report(state, conductor);
+      }
+    }
+    if (cfg.convergence.enabled) {
+      const checks = specialistRuns(conductor).checks;
+      const failed = state.features.find(f => checks[f.id]?.head === f.head &&
+        checks[f.id]?.status === 'failed-tests');
+      if (failed) {
+        const feedback = observeFailure(state, conductor, failed, checks[failed.id].tests, cfg, persist);
+        const decision = canRepair(state, conductor, failed, feedback, cfg);
+        if (!decision.allowed) {
+          note(conductor, 'convergence-stopped', failed.id + ': ' + decision.reason);
+          persist(state, conductor); return report(state, conductor);
+        }
+        if (Date.now() >= deadlineAt) {
+          note(conductor, 'paused', 'Convergence scheduling deadline reached before repair');
+          persist(state, conductor); return report(state, conductor);
+        }
+        try {
+          // The normal coordinator enforces clean HEAD, owned paths, unchanged provider,
+          // dependency safety, explicit approval and both worker/repair budgets.
+          await batchMain(['repair', id, failed.id, ...flags], repo);
+          state = currentState(directory);
+          note(conductor, 'repair-queued', failed.id + ': bounded repair queued with deterministic feedback; rerun conduct --approve to launch');
+          persist(state, conductor); return report(state, conductor);
+        } catch (error) {
+          conductor.lastError = error.message;
+          note(conductor, 'convergence-stopped', failed.id + ': repair blocked by safety checks');
+          persist(state, conductor); return report(currentState(directory), conductor);
+        }
+      }
+      const needsReview = state.features.find(f => checks[f.id]?.head === f.head &&
+        !['pass'].includes(checks[f.id]?.status));
+      if (needsReview) {
+        note(conductor, 'convergence-stopped', needsReview.id + ': checker or regression proof requires human review');
+        persist(state, conductor); return report(state, conductor);
       }
     }
     const revision = state.features.map(f => f.id + ':' + f.head).join('|');
