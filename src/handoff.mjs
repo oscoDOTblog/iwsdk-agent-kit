@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { boundedText } from './prompt.mjs';
 
 const LIMIT = 16000;
 function textFile(path) {
@@ -14,12 +15,20 @@ function gitInfo(worktree, ...args) {
 export function handoffPath(state, feature) {
   return join(state.directory, 'handoffs', feature.id + '.md');
 }
-export function sharedContext(state) {
+export function sharedContext(state, maxChars = LIMIT) {
   const path = join(state.repo, 'AGENT_CONTEXT.md');
   const content = textFile(path);
   if (!content) return '(AGENT_CONTEXT.md is not installed or is empty)';
-  if (content.length <= LIMIT) return content;
-  return content.slice(0, LIMIT) + '\n[Context truncated; read AGENT_CONTEXT.md directly for the rest.]';
+  return boundedText(content, maxChars, 'Project context');
+}
+export function compactHandoffPath(state, feature) {
+  return join(state.directory, 'handoffs', feature.id + '.compact.md');
+}
+export function compactHandoffContext(state, feature, maxChars = 3500) {
+  const compact = compactHandoffPath(state, feature);
+  // Pre-v0.4 checkpoints remain readable without a migration.
+  const content = textFile(existsSync(compact) ? compact : handoffPath(state, feature));
+  return boundedText(content, maxChars, 'Handoff');
 }
 export function handoffContext(state, feature) {
   const path = handoffPath(state, feature);
@@ -68,6 +77,25 @@ export function renderHandoff(state, feature, details = {}) {
     '',
   ].join('\n');
 }
+export function renderCompactHandoff(state, feature, details = {}, maxChars = 3500) {
+  const decisions = Array.isArray(feature.decisions) ? feature.decisions : [];
+  const text = [
+    '# Compact handoff: ' + state.id + ' / ' + feature.id,
+    'Status: ' + feature.status + '; provider: ' + (feature.backend ?? state.backend),
+    'Branch: ' + feature.branch,
+    'Last commit: ' + (details.head ?? '(unknown)'),
+    'Last blocker: ' + (feature.error ?? '(none)'),
+    'Interfaces: ' + (feature.interfaces ?? '(none specified)'),
+    'Owned paths: ' + (feature.owns ?? []).join(', '),
+    'Acceptance: ' + (feature.acceptance ?? []).join('; '),
+    'Confirmed decisions (only user/coordinator supplied): ' + (decisions.length ? decisions.join('; ') : '(none recorded)'),
+    'Git status (inspect before modifying): ' + boundedText(details.status ?? '', 500, 'Git status'),
+    'Last agent report (unverified): ' + boundedText(details.summary ?? '', 1200, 'Report'),
+    'Next action: inspect full checkpoint, Git diff and logs; address last blocker; run available checks.',
+    'Full checkpoint: ' + handoffPath(state, feature),
+  ].join('\n');
+  return boundedText(text, maxChars, 'Compact handoff');
+}
 export function writeHandoff(state, feature) {
   const summaryPath = feature.attemptDirectory && join(feature.attemptDirectory, 'summary.md');
   const summary = summaryPath && existsSync(summaryPath) ? textFile(summaryPath) : '';
@@ -79,6 +107,7 @@ export function writeHandoff(state, feature) {
   const path = handoffPath(state, feature);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, renderHandoff(state, feature, details));
+  writeFileSync(compactHandoffPath(state, feature), renderCompactHandoff(state, feature, details));
   return path;
 }
 
