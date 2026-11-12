@@ -68,6 +68,8 @@ test('unknown attempts are not reported as zero and cross-provider attempts reta
   assert.deepEqual(report.attempts.map(a => a.backend), ['claude', 'codex']);
   assert.equal(report.groups.find(g => g.backend === 'claude').inputTokens, 100);
   assert.equal(report.groups.find(g => g.backend === 'codex').inputTokens, null);
+  assert.ok(report.groups.find(g => g.backend === 'codex').partialMetrics.includes('inputTokens'));
+  assert.ok(report.groups.find(g => g.backend === 'claude').cacheHitRatio === 0.9);
   assert.match(formatUsageReport(report), /no worker log/);
   assert.equal(summarizeUsage([]).groups.length, 0);
 });
@@ -159,4 +161,64 @@ test('isolated review prompt is read-only and bounded; installer exposes all new
   assert.equal(pkg.scripts['agents:usage'], 'node scripts/agents.mjs usage');
   assert.equal(pkg.scripts['agents:cache-audit'], 'node scripts/cache-audit.mjs');
   assert.equal(pkg.scripts['agents:review-prompt'], 'node scripts/agents.mjs review-prompt');
+});
+
+test('installed batch usage, review-prompt and cache-audit commands work without model calls', () => {
+  const root = dir('iwsdk-v04-cli-');
+  function git(...args) {
+    const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  }
+  git('init', '-b', 'main');
+  git('config', 'user.name', 'CLI Test');
+  git('config', 'user.email', 'cli@example.invalid');
+  writeFileSync(join(root, 'package.json'), '{"name":"v04-cli-test"}\n');
+  writeFileSync(join(root, 'iwsdk-agent-kit.config.json'), '{"backend":"codex","baseBranch":"main"}\n');
+  writeFileSync(join(root, 'features.json'), JSON.stringify({
+    id: 'usage-demo', features: [{
+      id: 'toy', description: 'Test usage', owns: ['src/toys/'], acceptance: ['Tested'],
+      interfaces: 'none', contentChanges: false, runtimeRequired: false,
+    }],
+  }));
+  git('add', '.');
+  git('commit', '-m', 'baseline');
+  const baseline = git('rev-parse', 'HEAD');
+  const bin = join(process.cwd(), 'bin', 'iwsdk-agent-kit.mjs');
+  function call(...args) {
+    const r = spawnSync(process.execPath, [bin, ...args], { cwd: root, encoding: 'utf8', timeout: 15000 });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  }
+  call('batch', 'plan', 'features.json');
+  const directory = join(root, '.git', 'agent-workflow', 'batches', 'usage-demo');
+  const statePath = join(directory, 'state.json');
+  const state = JSON.parse(readFileSync(statePath, 'utf8'));
+  const attemptDir = join(directory, 'toy', '1');
+  mkdirSync(attemptDir, { recursive: true });
+  writeFileSync(join(attemptDir, 'spec.json'), JSON.stringify({ state, feature: state.features[0] }));
+  writeFileSync(join(attemptDir, 'worker.jsonl'), jsonl({
+    type: 'turn.completed', usage: { input_tokens: 200, cached_input_tokens: 100, output_tokens: 20 },
+  }));
+  mkdirSync(join(root, 'src', 'toys'), { recursive: true });
+  writeFileSync(join(root, 'src', 'toys', 'toy.txt'), 'done\n');
+  git('add', '.');
+  git('commit', '-m', 'toy implementation');
+  state.features[0].status = 'completed';
+  state.features[0].attempt = 1;
+  state.features[0].attemptDirectory = attemptDir;
+  state.features[0].worktree = root;
+  state.features[0].startHead = baseline;
+  state.features[0].head = git('rev-parse', 'HEAD');
+  writeFileSync(statePath, JSON.stringify(state));
+  const report = JSON.parse(call('batch', 'usage', 'usage-demo', '--json'));
+  assert.equal(report.groups[0].inputTokens, 200);
+  assert.equal(report.groups[0].cacheHitRatio, 0.5);
+  assert.match(call('batch', 'usage', 'usage-demo'), /Cache read/);
+  const promptPath = call('batch', 'review-prompt', 'usage-demo', 'toy');
+  assert.ok(existsSync(promptPath));
+  assert.match(readFileSync(promptPath, 'utf8'), /NEW context/);
+  assert.match(readFileSync(promptPath, 'utf8'), /toy.txt/);
+  const audit = JSON.parse(call('cache-audit', '--target', root, '--json'));
+  assert.ok(Array.isArray(audit.findings));
 });
