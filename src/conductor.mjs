@@ -1,10 +1,11 @@
 import { existsSync, readFileSync, openSync, closeSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { run, atomic, main as batchMain } from './orchestrator.mjs';
+import { run, atomic, ready, main as batchMain } from './orchestrator.mjs';
 import { readConductorConfig } from './conductor-config.mjs';
 import { plannerPrompt, verifierPrompt, runCoordinatorRole } from './conductor-ai.mjs';
 import { syncEvidence, saveEvidence, inspectEvidence } from './evidence.mjs';
 import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
+import { specialistRuns, exploreFeature, checkFeature } from './specialist-conductor.mjs';
 
 const json = path => JSON.parse(readFileSync(path, 'utf8'));
 const conductorPath = state => join(state.directory, 'conductor.json');
@@ -70,6 +71,7 @@ function report(state, conductor) {
     plan: conductor.plan, verification: conductor.verification,
     evidence: { complete: ledger.complete, findings: ledger.findings },
     lastError: conductor.lastError,
+    specialists: conductor.config.specialists.enabled ? specialistRuns(conductor) : { enabled: false },
     caveat: 'No automatic integration, publishing, cross-provider failover, or proof of runtime acceptance.',
   };
 }
@@ -92,10 +94,20 @@ export async function conduct(cwd, id, flags = []) {
     const cfg = conductor.config; // Stable across resumptions; edit a new batch to change limits.
     const workers = state.features.filter(f => ['pending', 'running'].includes(f.status))
       .map(f => f.backend ?? state.backend);
-    const providers = [...workers, ...((cfg.aiPlanning || cfg.aiVerification) ? [cfg.provider] : [])];
+    const providers = [...workers, ...((cfg.aiPlanning || cfg.aiVerification ||
+      (cfg.specialists.enabled && (cfg.specialists.explore || cfg.specialists.check))) ? [cfg.provider] : [])];
+    if (cfg.specialists.enabled && cfg.specialists.models.fixer &&
+        state.features.some(f => (f.backend ?? state.backend) !== cfg.provider)) {
+      throw new Error('Specialist fixer model requires implementation workers on the conductor provider; no model launched');
+    }
     enforceProviderIsolation(readProviderPolicy(repo), providers, flags, 'conduct');
     if (!state.conductor?.enabled) {
       state.conductor = { enabled: true, priority: state.features.map(f => f.id) };
+      atomic(statePath(state), state);
+    }
+    if (cfg.specialists.enabled && cfg.specialists.models.fixer) {
+      state.conductor.fixerModel = cfg.specialists.models.fixer;
+      state.conductor.fixerProvider = cfg.provider;
       atomic(statePath(state), state);
     }
     if (!conductor.plan) {
@@ -153,6 +165,18 @@ export async function conduct(cwd, id, flags = []) {
       }
       const active = state.features.some(f => ['pending', 'running'].includes(f.status));
       if (!active) break;
+      if (cfg.specialists.enabled && cfg.specialists.explore) {
+        const pending = ready(state);
+        const next = pending.find(f => !specialistRuns(conductor).investigations[f.id]);
+        if (next) {
+          if (!exploreFeature(state, conductor, cfg, next, persist, note)) return report(state, conductor);
+          continue;
+        }
+        if (pending.some(f => specialistRuns(conductor).investigations[f.id]?.status !== 'completed')) {
+          note(conductor, 'specialist-blocked', 'Explorer report needs human attention');
+          persist(state, conductor); return report(state, conductor);
+        }
+      }
       note(conductor, 'dispatching', 'Running existing bounded worker scheduler');
       persist(state, conductor);
       const before = started(state);
@@ -179,6 +203,23 @@ export async function conduct(cwd, id, flags = []) {
     }
     const ledger = syncEvidence(state);
     saveEvidence(state, ledger);
+    if (cfg.specialists.enabled && cfg.specialists.check) {
+      for (const feature of state.features) {
+        const prior = specialistRuns(conductor).checks[feature.id];
+        if (prior?.head === feature.head) {
+          if (prior.status === 'failed') {
+            note(conductor, 'specialist-blocked', 'Previous checker failure needs explicit review');
+            persist(state, conductor); return report(state, conductor);
+          }
+          continue;
+        }
+        if (Date.now() >= deadlineAt) {
+          note(conductor, 'paused', 'Time limit reached before independent checking');
+          persist(state, conductor); return report(state, conductor);
+        }
+        if (!checkFeature(state, conductor, cfg, feature, persist, note)) return report(state, conductor);
+      }
+    }
     const revision = state.features.map(f => f.id + ':' + f.head).join('|');
     if (cfg.aiVerification && conductor.verification?.revision !== revision) {
       note(conductor, 'verifying', 'Requesting advisory review; no acceptance items can be auto-approved');
