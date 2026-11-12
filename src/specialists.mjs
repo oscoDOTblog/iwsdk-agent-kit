@@ -77,7 +77,7 @@ export function specialistInvocation(provider, role, model, prompt, outputPath) 
   if (provider === 'claude') return {
     command: 'claude',
     args: ['-p', ...(model ? ['--model', model] : []), '--output-format', 'json',
-      '--permission-mode', 'dontAsk', '--tools', role === 'explorer' ? 'Read,Grep,Glob' : '',
+      '--permission-mode', 'dontAsk', '--tools', 'Read,Grep,Glob',
       '--disallowedTools', 'Agent,mcp__*'],
     stdin: prompt,
   };
@@ -171,7 +171,7 @@ export function runTargetedTests(state, feature, seconds, { execute = spawnSync 
 
 export function checkerPrompt(feature, diff, tests) {
   return [
-    'You are an independent read-only patch checker. No tools, edits, subagents, commands or provider handoffs.',
+    'You are an independent read-only patch checker. Inspect callers using Read/Grep/Glob only; no edits, shell commands, subagents, or provider handoffs.',
     'You are given the ACTUAL git diff for the recorded commit. Review changed callers, likely regressions, and acceptance gaps.',
     'Tests are deterministic local results, not model assertions. Missing tests are not passes.',
     'Never approve the acceptance ledger, integration, or publishing.',
