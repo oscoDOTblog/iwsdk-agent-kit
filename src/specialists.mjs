@@ -66,6 +66,7 @@ export function validateInvestigation(data, state) {
       throw new Error('Investigation requires path, positive line, and reason');
     }
     const file = pathIn(state.repo, ref.path);
+    runGit(state.repo, ['ls-files', '--error-unmatch', '--', ref.path]);
     const count = readFileSync(file, 'utf8').split('\n').length;
     if (ref.line > count) throw new Error('Investigation line outside source file: ' + ref.path);
     return { path: ref.path, line: ref.line, reason: ref.reason };
@@ -204,6 +205,7 @@ export function validateChecker(data, diff, worktree = null) {
     if (!paths.has(f.path)) {
       if (!worktree) throw new Error('Checker finding requires changed file or verified caller');
       const file = pathIn(worktree, f.path);
+      runGit(worktree, ['ls-files', '--error-unmatch', '--', f.path]);
       if (f.line > readFileSync(file, 'utf8').split('\n').length) {
         throw new Error('Checker caller line outside source file');
       }
