@@ -16,6 +16,26 @@ export const DEFAULT_SPECIALISTS = Object.freeze({
   maxTestSeconds: 30,
   context: DEFAULT_CONTEXT,
 });
+export const DEFAULT_CONVERGENCE = Object.freeze({
+  enabled: false,
+  maxRepairsPerFeature: 1,
+  maxFeedbackChars: 1800,
+});
+export function validateConvergenceConfig(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('conductor.convergence must be an object');
+  for (const key of Object.keys(input)) {
+    if (!Object.hasOwn(DEFAULT_CONVERGENCE, key)) throw new Error('Unknown conductor.convergence setting: ' + key);
+  }
+  const cfg = { ...DEFAULT_CONVERGENCE, ...input };
+  if (typeof cfg.enabled !== 'boolean') throw new Error('conductor.convergence.enabled must be boolean');
+  if (!Number.isInteger(cfg.maxRepairsPerFeature) || cfg.maxRepairsPerFeature < 0 || cfg.maxRepairsPerFeature > 2) {
+    throw new Error('conductor.convergence.maxRepairsPerFeature must be between 0 and 2');
+  }
+  if (!Number.isInteger(cfg.maxFeedbackChars) || cfg.maxFeedbackChars < 500 || cfg.maxFeedbackChars > 4000) {
+    throw new Error('conductor.convergence.maxFeedbackChars must be between 500 and 4000');
+  }
+  return cfg;
+}
 export const DEFAULT_CONDUCTOR = Object.freeze({
   enabled: false,
   provider: 'claude',
@@ -28,6 +48,7 @@ export const DEFAULT_CONDUCTOR = Object.freeze({
   autoIntegrate: false,
   models: {},
   specialists: DEFAULT_SPECIALISTS,
+  convergence: DEFAULT_CONVERGENCE,
 });
 const fields = new Set(Object.keys(DEFAULT_CONDUCTOR));
 export function validateConductorConfig(input = {}) {
@@ -83,11 +104,15 @@ export function validateConductorConfig(input = {}) {
     if (!['explorer', 'fixer', 'checker'].includes(role)) throw new Error('Unsupported specialist model role: ' + role);
     validateModelPin(cfg.provider, model);
   }
+  const convergence = validateConvergenceConfig(cfg.convergence);
+  if (convergence.enabled && (!cfg.enabled || !specialists.enabled || !specialists.check)) {
+    throw new Error('Convergence requires enabled conductor, specialists and checker');
+  }
   const context = validateContextConfig(specialists.context);
   if (context.enabled && (!cfg.enabled || !specialists.enabled || !specialists.explore)) {
     throw new Error('Context enrichment requires enabled conductor, specialists and explorer');
   }
-  return { ...cfg, models: { ...cfg.models }, specialists: { ...specialists,
+  return { ...cfg, convergence, models: { ...cfg.models }, specialists: { ...specialists,
     models: { ...specialists.models }, context } };
 }
 export function readConductorConfig(repo) {
