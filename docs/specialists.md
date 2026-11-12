@@ -4,6 +4,10 @@ This layer extends opt-in v0.5 Conductor Mode. It does not replace the manual
 scheduler, provider isolation, worker permissions, or human-reviewed acceptance
 ledger. **All specialist profiles are off by default.**
 
+v0.7 adds separately opt-in **offline caller maps** and **Context7
+documentation lookups** to the explorer/checker. These are disabled by
+default. See [Context-Aware Investigation](context-aware-investigation.md).
+
 ## Roles
 
 - **Explorer:** read-only Claude (Read/Grep/Glob) or read-only-sandbox Codex.
