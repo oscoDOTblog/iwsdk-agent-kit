@@ -83,8 +83,12 @@ export function validateConductorConfig(input = {}) {
     if (!['explorer', 'fixer', 'checker'].includes(role)) throw new Error('Unsupported specialist model role: ' + role);
     validateModelPin(cfg.provider, model);
   }
+  const context = validateContextConfig(specialists.context);
+  if (context.enabled && (!cfg.enabled || !specialists.enabled || !specialists.explore)) {
+    throw new Error('Context enrichment requires enabled conductor, specialists and explorer');
+  }
   return { ...cfg, models: { ...cfg.models }, specialists: { ...specialists,
-    models: { ...specialists.models }, context: validateContextConfig(specialists.context) } };
+    models: { ...specialists.models }, context } };
 }
 export function readConductorConfig(repo) {
   const path = join(repo, 'iwsdk-agent-kit.config.json');
