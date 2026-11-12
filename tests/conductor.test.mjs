@@ -76,7 +76,7 @@ test('conductor is opt-in, bounded and never permits auto integration', () => {
   assert.throws(() => validateConductorConfig({ unexpected: true }), /Unknown conductor setting/);
 });
 test('planner cannot change approved task set or invent test results', () => {
-  const state = { id: 'demo', features: [
+  const state = { id: 'demo', directory: temp('iwsdk-planner-ledger-'), features: [
     { ...feature(), dependsOn: [] },
     { ...feature(), id: 'npc', dependsOn: ['toy'] },
   ] };
