@@ -11,7 +11,7 @@ import { validateTargetedTests, validateInvestigation, investigationPrompt, inve
   runTargetedTests, checkerPrompt, validateChecker, saveCheck } from '../src/specialists.mjs';
 import { specialistRuns, canInvoke } from '../src/specialist-conductor.mjs';
 import { readBatchUsage } from '../src/usage.mjs';
-import { main } from '../src/orchestrator.mjs';
+import { main, resolveWorkerModel } from '../src/orchestrator.mjs';
 
 const temp = () => mkdtempSync(join(tmpdir(), 'iwsdk-specialists-'));
 function git(cwd, ...args) {
@@ -224,4 +224,28 @@ test('manual planning still makes no specialist calls or reports', async () => {
   assert.equal(readBatchUsage(state).roles, undefined);
   assert.equal(existsSync(join(directory, 'conductor.json')), false);
   assert.equal(existsSync(join(directory, 'conductor', 'investigations')), false);
+});
+
+test('fixer model pin applies only to its own provider and manual worker remains unchanged', () => {
+  const state = { promptSettings: { workerModels: { claude: 'default-claude', codex: 'default-codex' } } };
+  assert.equal(resolveWorkerModel(state, 'claude'), 'default-claude');
+  assert.equal(resolveWorkerModel(state, 'codex'), 'default-codex');
+  state.conductor = { enabled: true, fixerProvider: 'claude', fixerModel: 'specialist-sonnet' };
+  assert.equal(resolveWorkerModel(state, 'claude'), 'specialist-sonnet');
+  assert.equal(resolveWorkerModel(state, 'codex'), 'default-codex');
+});
+
+test('checker invocation is isolated and sees only its own worktree', () => {
+  const { state, feature } = fixture();
+  const diff = captureFeatureDiff(state, feature, 16000);
+  const result = runSpecialist(state, cfg(), 'checker', feature, checkerPrompt(feature, diff, []), {
+    execute: (command, args, options) => {
+      assert.equal(options.cwd, feature.worktree);
+      assert.equal(args[args.indexOf('--tools') + 1], 'Read,Grep,Glob');
+      assert.ok(!args.includes('Edit'));
+      return { status: 0, stdout: JSON.stringify({ type: 'result', subtype: 'success',
+        result: JSON.stringify({ verdict: 'needs-human', summary: 'Headset test not run', findings: [] }) }) };
+    },
+  });
+  assert.equal(validateChecker(result.data, diff).verdict, 'needs-human');
 });
