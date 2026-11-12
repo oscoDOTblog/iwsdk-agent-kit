@@ -13,7 +13,7 @@ ledger. **All specialist profiles are off by default.**
 - **Fixer:** the existing isolated feature worker. An optional model pin
   overrides the usual worker model only if the backend matches the conductor
   provider. Existing Git ownership, permissions, and start limits still apply.
-- **Checker:** a separate read-only model invocation given the actual Git diff
+- **Checker:** a separate read-only model invocation (Read/Grep/Glob only for Claude) given the actual Git diff
   from feature.startHead to feature.head and deterministic targeted test
   results. It returns advisory verdict and changed-file findings.
 - **Targeted tests:** explicit per-feature test paths run with node --test PATH,
