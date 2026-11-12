@@ -212,3 +212,34 @@ test('repair command rejects manual mode, dirty worktrees and unapproved calls',
   await assert.rejects(main(['repair', 'demo', 'toy', '--approve'], repo), /opted-in/);
   assert.equal(JSON.parse(readFileSync(join(directory, 'state.json'), 'utf8')).features[0].status, 'completed');
 });
+
+test('repair rejects dirty worktrees, started dependents, ownership changes and spent budgets', async () => {
+  const { repo, directory, state, feature, cfg } = fixture(43);
+  const tests = runTargetedTests(state, feature, 10);
+  const conductor = {};
+  observeFailure(state, conductor, feature, tests, cfg, () => {});
+  writeFileSync(join(directory, 'conductor.json'), JSON.stringify({
+    config: cfg, convergenceRuns: conductor.convergenceRuns,
+  }));
+  writeFileSync(join(repo, 'untracked.txt'), 'do not discard me\n');
+  await assert.rejects(main(['repair', 'demo', 'toy', '--approve'], repo), /unchanged clean feature branch/);
+  assert.equal(readFileSync(join(repo, 'untracked.txt'), 'utf8'), 'do not discard me\n');
+  const { unlinkSync } = await import('node:fs');
+  unlinkSync(join(repo, 'untracked.txt'));
+
+  state.features.push({ id: 'dependent', status: 'running', dependsOn: ['toy'],
+    attempt: 0, backend: 'codex' });
+  writeFileSync(join(directory, 'state.json'), JSON.stringify(state));
+  await assert.rejects(main(['repair', 'demo', 'toy', '--approve'], repo), /Dependent feature already started/);
+  state.features.pop();
+
+  state.features[0].owns = ['tests/'];
+  writeFileSync(join(directory, 'state.json'), JSON.stringify(state));
+  await assert.rejects(main(['repair', 'demo', 'toy', '--approve'], repo), /ownership violation/);
+  state.features[0].owns = ['src/'];
+
+  state.features[0].repairCount = cfg.convergence.maxRepairsPerFeature;
+  writeFileSync(join(directory, 'state.json'), JSON.stringify(state));
+  await assert.rejects(main(['repair', 'demo', 'toy', '--approve'], repo), /budget is exhausted/);
+  assert.equal(JSON.parse(readFileSync(join(directory, 'state.json'), 'utf8')).features[0].status, 'completed');
+});
