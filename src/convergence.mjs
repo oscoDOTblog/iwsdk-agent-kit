@@ -44,7 +44,8 @@ function testFailure(state, test) {
   const signature = [test.path, ...details.names, ...details.errors, ...details.expected,
     ...details.actual, ...details.types].join('\n').replace(/\b\d+(?:\.\d+)?ms\b/g, 'DURATION');
   return { test: test.path, expected: short(expected), observed: short(observed),
-    diagnostics: details, log: test.log, sha256: test.sha256, fingerprint: hash(signature) };
+    diagnostics: details, log: test.log, sha256: test.sha256, fingerprint: hash(signature),
+    infrastructure: /ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find (?:module|package)/.test(data) };
 }
 export function failureReport(state, feature, tests, previous = [], maxChars = 1800) {
   const failed = tests.filter(test => test.status !== 'passed');
@@ -53,6 +54,7 @@ export function failureReport(state, feature, tests, previous = [], maxChars = 1
   const fingerprint = hash(failures.map(f => f.fingerprint).sort().join('|'));
   return {
     version: 1, feature: feature.id, head: feature.head, status: 'failed', fingerprint,
+    infrastructure: failures.some(f => f.infrastructure),
     failures: failures.map(({ diagnostics, ...rest }) => rest),
     previous: previous.slice(-2).map(p => ({ head: p.head, fingerprint: p.fingerprint })),
     guidance: 'Review the deterministic test failures. Inspect full logs and existing code before patching; do not repeat prior failed approaches.',
@@ -128,7 +130,7 @@ export function runRegressionProof(state, feature, headTests, seconds) {
     // Only reuse installed dependencies when lockfiles are identical.
     const dependencies = join(feature.worktree, 'node_modules');
     const lockUnchanged = spawnSync('git', ['diff', '--quiet', feature.startHead, feature.head,
-      '--', 'package-lock.json'], { cwd: state.repo }).status === 0;
+      '--', 'package-lock.json', 'package.json'], { cwd: state.repo }).status === 0;
     if (lockUnchanged && existsSync(dependencies) && lstatSync(dependencies).isDirectory()) {
       symlinkSync(realpathSync(dependencies), join(tmp, 'node_modules'), 'dir');
     }
@@ -163,6 +165,7 @@ export function runRegressionProof(state, feature, headTests, seconds) {
 export function canRepair(state, conductor, feature, report, cfg) {
   if (!cfg.convergence.enabled || !report || report.status !== 'failed') return { allowed: false, reason: 'Convergence disabled or no deterministic failure' };
   if (report.repeated) return { allowed: false, reason: 'Same deterministic failure repeated after repair; human diagnosis required' };
+  if (report.infrastructure) return { allowed: false, reason: 'Missing dependency or module requires environment diagnosis before repair' };
   if ((feature.repairCount ?? 0) >= cfg.convergence.maxRepairsPerFeature) {
     return { allowed: false, reason: 'Per-feature repair budget exhausted' };
   }
