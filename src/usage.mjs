@@ -64,9 +64,11 @@ export function summarizeUsage(attempts) {
   const groups = [...new Set(attempts.map(a => a.backend))].map(backend => {
     const rows = attempts.filter(a => a.backend === backend);
     const known = rows.filter(a => METRICS.some(k => a.usage[k] !== null));
-    const result = Object.fromEntries(METRICS.map(key => [key, sum(known.map(a => a.usage), key)]));
-    const denom = backend === 'claude' || backend === 'codex' ? result.inputTokens : null;
-    return { backend, attempts: rows.length, measuredAttempts: known.length, ...result,
+    const result = Object.fromEntries(METRICS.map(key => [key, sum(rows.map(a => a.usage), key)]));
+    const partialMetrics = METRICS.filter(key => rows.some(a => a.usage[key] === null));
+    const completeCache = !partialMetrics.includes('inputTokens') && !partialMetrics.includes('cacheReadTokens');
+    const denom = completeCache && (backend === 'claude' || backend === 'codex') ? result.inputTokens : null;
+    return { backend, attempts: rows.length, measuredAttempts: known.length, ...result, partialMetrics,
       cacheHitRatio: ratio(result.cacheReadTokens, denom) };
   });
   return { groups, attempts };
@@ -94,14 +96,15 @@ export function readBatchUsage(state, { maxLogBytes = 16 * 1024 * 1024 } = {}) {
       status: attempt === feature.attempt ? feature.status : 'previous attempt', usage, note });
   }
   return { batch: state.id, generatedAt: new Date().toISOString(), ...summarizeUsage(attempts),
-    caveat: 'Metrics are parsed from local CLI logs; missing data is unknown, not zero. No subscription quota or billing balance is available.' };
+    caveat: 'Metrics come from local CLI logs. A + suffix means partial observed tokens, not a complete total; n/a means unknown. No subscription quota or billing balance is available.' };
 }
 const display = value => value === null || value === undefined ? 'n/a' : value.toLocaleString('en-US');
 export function formatUsageReport(report) {
+  const value = (group, key) => display(group[key]) + (group[key] !== null && group.partialMetrics.includes(key) ? '+' : '');
   const rows = [
     ['Provider', 'Attempts', 'Measured', 'Input', 'Output', 'Cache read', 'Cache write', 'Hit ratio'],
-    ...report.groups.map(g => [g.backend, String(g.attempts), String(g.measuredAttempts), display(g.inputTokens),
-      display(g.outputTokens), display(g.cacheReadTokens), display(g.cacheWriteTokens),
+    ...report.groups.map(g => [g.backend, String(g.attempts), String(g.measuredAttempts), value(g, 'inputTokens'),
+      value(g, 'outputTokens'), value(g, 'cacheReadTokens'), value(g, 'cacheWriteTokens'),
       g.cacheHitRatio === null ? 'n/a' : (g.cacheHitRatio * 100).toFixed(1) + '%']),
   ];
   const widths = rows[0].map((_, i) => Math.max(...rows.map(row => row[i].length)));
