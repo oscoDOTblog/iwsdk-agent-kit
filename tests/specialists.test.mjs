@@ -161,9 +161,10 @@ test('checker receives actual commit diff, deterministic tests and SHA-bound art
 
 test('failed targeted tests are recorded, never reported as passing evidence', () => {
   const { state, feature } = fixture();
-  const tests = runTargetedTests(state, feature, 20, {
-    execute: () => ({ status: 1, stdout: 'not ok 1 - answer is 42', stderr: '' }),
-  });
+  writeFileSync(join(state.repo, 'tests', 'failure.test.mjs'),
+    "import test from 'node:test'; test('expected failure', () => { throw new Error('intentional'); });\\n");
+  feature.targetedTests = ['tests/failure.test.mjs'];
+  const tests = runTargetedTests(state, feature, 20);
   assert.equal(tests[0].status, 'failed');
   assert.equal(tests[0].head, feature.head);
   const diff = captureFeatureDiff(state, feature, 16000);
