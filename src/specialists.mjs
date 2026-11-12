@@ -157,9 +157,10 @@ export function runTargetedTests(state, feature, seconds, { execute = spawnSync 
   // recursive test-runner guard silently skip the explicitly requested tests.
   const environment = { ...process.env };
   delete environment.NODE_TEST_CONTEXT;
+  delete environment.CONTEXT7_API_KEY;
   for (const [index, path] of tests.entries()) {
     pathIn(feature.worktree, path);
-    const output = join(state.directory, 'conductor', 'tests', feature.id, String(index + 1) + '.log');
+    const output = join(state.directory, 'conductor', 'tests', feature.id, feature.head, String(index + 1) + '.log');
     mkdirSync(dirname(output), { recursive: true });
     const result = execute(process.execPath, ['--test', path], {
       cwd: feature.worktree, encoding: 'utf8', timeout: seconds * 1000, maxBuffer: 1024 * 1024,
