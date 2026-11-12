@@ -12,6 +12,7 @@ import { validateTargetedTests, validateInvestigation, investigationPrompt, inve
 import { specialistRuns, canInvoke } from '../src/specialist-conductor.mjs';
 import { readBatchUsage } from '../src/usage.mjs';
 import { main, resolveWorkerModel } from '../src/orchestrator.mjs';
+import { conduct } from '../src/conductor.mjs';
 
 const temp = () => mkdtempSync(join(tmpdir(), 'iwsdk-specialists-'));
 function git(cwd, ...args) {
@@ -249,4 +250,23 @@ test('checker invocation is isolated and sees only its own worktree', () => {
     },
   });
   assert.equal(validateChecker(result.data, diff).verdict, 'needs-human');
+});
+
+test('specialist-only conductor still requires approval and explicit provider authorization', async () => {
+  const { repo } = fixture();
+  writeFileSync(join(repo, 'iwsdk-agent-kit.config.json'), JSON.stringify({
+    backend: 'codex', providerIsolation: 'strict', baseBranch: 'main',
+    conductor: { enabled: true, provider: 'claude', aiPlanning: false, aiVerification: false,
+      specialists: { enabled: true, explore: true, check: true } },
+  }));
+  writeFileSync(join(repo, 'batch.json'), JSON.stringify({ id: 'isolation', features: [{
+    id: 'fix', description: 'Fix a value', owns: ['src/main.mjs'],
+    acceptance: ['answer is 42'], interfaces: 'none', contentChanges: false, runtimeRequired: false,
+  }] }));
+  await main(['plan', 'batch.json'], repo);
+  await assert.rejects(conduct(repo, 'isolation'), /--approve/);
+  await assert.rejects(conduct(repo, 'isolation', ['--approve']), /Provider isolation blocked conduct/);
+  const directory = join(repo, '.git', 'agent-workflow', 'batches', 'isolation');
+  assert.equal(existsSync(join(directory, 'conductor', 'explorer')), false);
+  assert.equal(existsSync(join(directory, 'conductor.json')), false);
 });
