@@ -3,6 +3,17 @@ import { join } from 'node:path';
 import { backendName } from './backends.mjs';
 import { validateModelPin } from './prompt.mjs';
 
+export const DEFAULT_SPECIALISTS = Object.freeze({
+  enabled: false,
+  explore: true,
+  check: true,
+  models: {},
+  maxCalls: 12,
+  maxExplorerCalls: 6,
+  maxCheckerCalls: 6,
+  maxDiffChars: 16000,
+  maxTestSeconds: 30,
+});
 export const DEFAULT_CONDUCTOR = Object.freeze({
   enabled: false,
   provider: 'claude',
@@ -14,6 +25,7 @@ export const DEFAULT_CONDUCTOR = Object.freeze({
   maxRunMinutes: 30,
   autoIntegrate: false,
   models: {},
+  specialists: DEFAULT_SPECIALISTS,
 });
 const fields = new Set(Object.keys(DEFAULT_CONDUCTOR));
 export function validateConductorConfig(input = {}) {
@@ -43,7 +55,33 @@ export function validateConductorConfig(input = {}) {
     if (!['planner', 'verifier'].includes(role)) throw new Error('Unsupported conductor model role: ' + role);
     validateModelPin(cfg.provider, model);
   }
-  return { ...cfg, models: { ...cfg.models } };
+  const inputSpecialists = cfg.specialists;
+  if (!inputSpecialists || typeof inputSpecialists !== 'object' || Array.isArray(inputSpecialists)) {
+    throw new Error('conductor.specialists must be an object');
+  }
+  for (const key of Object.keys(inputSpecialists)) {
+    if (!Object.hasOwn(DEFAULT_SPECIALISTS, key)) throw new Error('Unknown conductor.specialists setting: ' + key);
+  }
+  const specialists = { ...DEFAULT_SPECIALISTS, ...inputSpecialists };
+  for (const key of ['enabled', 'explore', 'check']) {
+    if (typeof specialists[key] !== 'boolean') throw new Error('conductor.specialists.' + key + ' must be boolean');
+  }
+  for (const [key, min, max] of [
+    ['maxCalls', 1, 100], ['maxExplorerCalls', 1, 100], ['maxCheckerCalls', 1, 100],
+    ['maxDiffChars', 2000, 64000], ['maxTestSeconds', 1, 120],
+  ]) {
+    if (!Number.isInteger(specialists[key]) || specialists[key] < min || specialists[key] > max) {
+      throw new Error('conductor.specialists.' + key + ' must be an integer between ' + min + ' and ' + max);
+    }
+  }
+  if (!specialists.models || typeof specialists.models !== 'object' || Array.isArray(specialists.models)) {
+    throw new Error('conductor.specialists.models must be an object');
+  }
+  for (const [role, model] of Object.entries(specialists.models)) {
+    if (!['explorer', 'fixer', 'checker'].includes(role)) throw new Error('Unsupported specialist model role: ' + role);
+    validateModelPin(cfg.provider, model);
+  }
+  return { ...cfg, models: { ...cfg.models }, specialists: { ...specialists, models: { ...specialists.models } } };
 }
 export function readConductorConfig(repo) {
   const path = join(repo, 'iwsdk-agent-kit.config.json');
