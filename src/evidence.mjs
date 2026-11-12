@@ -1,8 +1,13 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { atomic } from './orchestrator.mjs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep, dirname } from 'node:path';
+function atomic(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = path + '.tmp-' + process.pid;
+  writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n');
+  renameSync(temporary, path);
+}
 
 const STATES = new Set(['pending', 'passed', 'failed', 'blocked']);
 const KINDS = new Set(['test', 'runtime', 'review']);
