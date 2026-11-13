@@ -30,6 +30,10 @@ function mergeSection(original, body) {
   return original.slice(0, start) + section + original.slice(end + managedEnd.length);
 }
 const sha256 = value => createHash('sha256').update(value).digest('hex');
+function fileKind(path) {
+  try { return lstatSync(path).isFile() ? 'file' : 'other'; }
+  catch (error) { if (error.code === 'ENOENT') return 'missing'; throw error; }
+}
 export function install(root = process.cwd(), { dryRun = false, forceManaged = false } = {}) {
   const pkgPath = join(root, 'package.json');
   if (!existsSync(pkgPath)) throw Error('Run inside a project with package.json');
@@ -37,7 +41,7 @@ export function install(root = process.cwd(), { dryRun = false, forceManaged = f
   const detected = inspectProject(root);
   const actions = [];
   const manifestPath = join(root, '.iwsdk-agent-kit.manifest.json');
-  if (existsSync(manifestPath) && !lstatSync(manifestPath).isFile()) {
+  if (fileKind(manifestPath) === 'other') {
     throw new Error('Refusing non-regular installer manifest');
   }
   const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) :
@@ -51,8 +55,9 @@ export function install(root = process.cwd(), { dryRun = false, forceManaged = f
   const write = (path, content, mode = 'managed') => {
     const managedScript = mode === 'managed-script';
     const rel = relative(root, path);
-    const existed = existsSync(path);
-    if (existed && !lstatSync(path).isFile()) {
+    const kind = fileKind(path);
+    const existed = kind !== 'missing';
+    if (kind === 'other') {
       actions.push({ path, action: 'conflict', reason: 'Non-regular file preserved' });
       return;
     }
