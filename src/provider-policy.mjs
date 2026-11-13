@@ -26,12 +26,29 @@ export function readProviderPolicy(repo, source = process.env) {
   if (config.providerIsolation !== undefined && config.providerIsolation !== 'strict') {
     throw new Error('providerIsolation must be "strict"; provider switching requires an explicit per-command override');
   }
+  const coordinator = detectCoordinator(source);
   return {
     mode: 'strict',
-    configuredBackend: backendName(config.backend ?? 'codex'),
-    coordinator: detectCoordinator(source),
+    configuredBackend: resolveConfiguredBackend(config.backend, coordinator),
+    auto: config.backend === 'auto',
+    coordinator,
     configPath: path,
   };
+}
+
+/**
+ * Explicit opt-in: use the provider of the current coordinating CLI.
+ * A missing/ambiguous coordinator must fail closed rather than spend on a guess.
+ * OpenCode and Muse need IWSDK_AGENT_COORDINATOR=opencode|muse.
+ * Once a batch is planned, its backend remains fixed in batch state.
+ */
+export function resolveConfiguredBackend(value, coordinator) {
+  if (value !== 'auto') return backendName(value ?? 'codex');
+  if (!coordinator) {
+    throw new Error('backend "auto" follows the coordinating CLI, but none was detected. ' +
+      'Set IWSDK_AGENT_COORDINATOR=codex|claude|opencode|muse or select a named backend. No worker was launched.');
+  }
+  return backendName(coordinator.backend);
 }
 
 function approvedTargets(flags) {

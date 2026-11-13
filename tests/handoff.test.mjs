@@ -32,7 +32,7 @@ test('Muse Code is an explicit sandboxed headless backend', () => {
   assert.equal(parseWorkerResult('muse', 'Implemented feature; tests passed.'), 'Implemented feature; tests passed.');
   assert.throws(() => parseWorkerResult('muse', ' '), /empty report/);
 });
-test('installer adds shared context and Muse while backing up changed managed files', () => {
+test('installer adds shared context and Muse while preserving local edits unless explicitly overridden', () => {
   const dir = mkdtempSync(join(tmpdir(), 'iwsdk-muse-install-'));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));
   writeFileSync(join(dir, 'AGENTS.md'), 'My own rules\n');
@@ -51,9 +51,13 @@ test('installer adds shared context and Muse while backing up changed managed fi
   writeFileSync(join(dir, 'scripts/agents.mjs'), '// user modification\n');
   writeFileSync(join(dir, 'AGENT_CONTEXT.md'), '# My own context\n');
   const result = install(dir);
-  assert.ok(result.some(x => x.action === 'backup' && x.path.endsWith('scripts/agents.mjs')));
-  assert.ok(result.some(x => x.action === 'conflict' && x.path.endsWith('AGENT_CONTEXT.md')));
+  assert.ok(result.some(x => x.action === 'conflict' && x.path.endsWith('scripts/agents.mjs')));
+  assert.equal(readFileSync(join(dir, 'scripts/agents.mjs'), 'utf8'), '// user modification\n');
   assert.equal(readFileSync(join(dir, 'AGENT_CONTEXT.md'), 'utf8'), '# My own context\n');
+  const forced = install(dir, { forceManaged: true });
+  assert.ok(forced.some(x => x.action === 'conflict' && x.path.endsWith('AGENT_CONTEXT.md')));
+  assert.ok(forced.some(x => x.action === 'backup' && x.path.endsWith('scripts/agents.mjs')));
+  assert.notEqual(readFileSync(join(dir, 'scripts/agents.mjs'), 'utf8'), '// user modification\n');
   assert.ok(existsSync(join(dir, '.iwsdk-agent-kit-backups')));
   assert.match(readFileSync(join(dir, '.gitignore'), 'utf8'), /iwsdk-agent-kit-backups/);
 });

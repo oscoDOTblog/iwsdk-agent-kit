@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, openSync, closeSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { run, atomic, main as batchMain } from './orchestrator.mjs';
-import { readConductorConfig } from './conductor-config.mjs';
+import { readConductorConfig, resolveConductorProvider } from './conductor-config.mjs';
 import { plannerPrompt, verifierPrompt, runCoordinatorRole } from './conductor-ai.mjs';
 import { syncEvidence, saveEvidence, inspectEvidence } from './evidence.mjs';
 import { readProviderPolicy, enforceProviderIsolation } from './provider-policy.mjs';
@@ -84,8 +84,11 @@ export function conductorStatus(cwd, id) {
 export async function conduct(cwd, id, flags = []) {
   if (!flags.includes('--approve')) throw new Error('Conductor requires explicit --approve; no provider calls were made');
   const { repo, directory } = location(cwd, id);
-  const config = readConductorConfig(repo);
-  if (!config.enabled) throw new Error('Conductor is disabled; set conductor.enabled=true to opt in');
+  const raw = readConductorConfig(repo);
+  if (!raw.enabled) throw new Error('Conductor is disabled; set conductor.enabled=true to opt in');
+  // Resolve only for AI roles. A deterministic-only conductor can run with
+  // OpenCode/Muse workers without invoking an unsupported AI coordinator.
+  const config = resolveConductorProvider(raw, readProviderPolicy(repo).coordinator);
   return withLock(directory, async () => {
     let state = currentState(directory);
     let conductor = snapshot(state, config);

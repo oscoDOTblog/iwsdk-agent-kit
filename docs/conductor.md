@@ -173,6 +173,16 @@ npm run agents:integrate -- my-batch --approve
 
 No automatic integration, publishing or deployment occurs.
 
+## Optional harness-aware provider
+
+Set `"conductor": { "provider": "auto" }` to select the active Claude
+Code or Codex coordinator for optional AI planner/verifier roles. Do not pin
+models in auto mode. For OpenCode or Muse workers, set
+`"aiPlanning": false, "aiVerification": false` and use
+`"backend": "auto"` with an explicit coordinator marker. The batch remains
+pinned to its originally planned provider; switching harnesses does not
+silently authorize a new provider.
+
 ## Limits and security
 
 The conductor cannot guarantee a **monetary cap** or stop spending by a

@@ -2,7 +2,7 @@
 
 A reusable, project-aware multi-agent development workflow for Meta IWSDK projects. Run **Codex**, **Claude Code**, **OpenCode**, or **Meta Muse Code** independently. Feature workers use isolated Git worktrees, with explicit review and integration gates.
 
-> **Experimental v0.5.0** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
+> **Experimental v0.5.1** — public GitHub-source package, not published to npm. The four CLI adapters are tested with local mock data only; authenticated model workers and Quest runtime testing have not been verified.
 
 ## Install into an existing IWSDK project
 
@@ -14,11 +14,20 @@ npx iwsdk-agent-kit init --dry-run
 npx iwsdk-agent-kit init
 ```
 
-The installer copies the runner into `scripts/`, installs project-local agent definitions, and merges a clearly delimited managed section into `AGENTS.md` and `CLAUDE.md`. It also creates `AGENT_CONTEXT.md` if missing. Existing unmanaged agent files are preserved and reported as conflicts. It adds `agents:*` scripts to `package.json`. Changed managed files are backed up to `.iwsdk-agent-kit-backups/` before being updated.
+The installer copies the runner into `scripts/`, installs project-local agent definitions, and merges a clearly delimited managed section into `AGENTS.md` and `CLAUDE.md`. It also creates `AGENT_CONTEXT.md` if missing. Existing unmanaged agent files are preserved and reported as conflicts. It adds `agents:*` scripts to `package.json`. The installer records SHA-256 hashes for installed runner scripts in
+`.iwsdk-agent-kit.manifest.json`. A clean manifest-matched script can be updated
+(with a backup); locally modified or legacy scripts are **preserved as conflicts**, and no managed runner scripts are partially upgraded
+instead of silently overwritten. To intentionally replace one after reviewing
+the diff, run `npx iwsdk-agent-kit init --dry-run --force-managed`, then
+`npx iwsdk-agent-kit init --force-managed`. Backups are written to
+`.iwsdk-agent-kit-backups/`.
 
-**Provider isolation is now strict by default.** The kit uses the `backend` from your project's `iwsdk-agent-kit.config.json` (normally `codex`) and blocks unexpected Claude/OpenCode/Muse workers at **plan and start**, including existing batches. To switch your default, edit that config; for a one-off cross-provider run, explicitly authorize the named backend at both steps. See [provider isolation](docs/provider-isolation.md).
+**Provider isolation is strict by default.** Optional `"backend": "auto"`
+follows the detected coordinating CLI (Claude Code, Codex, or an explicit
+`IWSDK_AGENT_COORDINATOR=opencode|muse`). It refuses to guess when no harness
+is detected, and a planned batch never silently changes provider. The kit uses the `backend` from your project's `iwsdk-agent-kit.config.json` (normally `codex`) and blocks unexpected Claude/OpenCode/Muse workers at **plan and start**, including existing batches. To switch your default, edit that config; for a one-off cross-provider run, explicitly authorize the named backend at both steps. See [provider isolation](docs/provider-isolation.md).
 
-**Already using the kit?** Re-run the install command to update the GitHub dependency, then inspect `npx iwsdk-agent-kit init --dry-run`. The installer overwrites managed runner scripts after backing them up; **do not run `init` blindly in a project with custom worker/sandbox code**. Review the diff and commit only the intended changes.
+**Already using the kit?** Re-run the install command to update the GitHub dependency, then inspect `npx iwsdk-agent-kit init --dry-run`. The installer now **preserves locally modified runner scripts**; inspect reported conflicts and review backups before any explicit `--force-managed` migration. Do not blindly replace custom worker/sandbox code. Review the diff and commit only the intended changes.
 
 ## Use one coding CLI per batch
 
@@ -34,7 +43,7 @@ npm run agents:integrate -- example-batch --approve
 npm run agents:publish -- example-batch --approve
 ```
 
-To use `claude`, `opencode` or `muse` by default, first change `backend` in `iwsdk-agent-kit.config.json` to that provider. An unexpected provider is blocked unless the command includes `--allow-cross-provider BACKEND --approve`. The batch has a default backend, but an explicitly reviewed handoff can reassign a **stopped** feature to another CLI. Running `publish` pushes an integration branch and creates a PR; it never merges the PR.
+To use `claude`, `opencode` or `muse` by default, first change `backend` in `iwsdk-agent-kit.config.json` to that provider. Set `"backend": "auto"` only when you deliberately want to follow the detected coordinating harness; the provider is pinned when the batch is planned. An unexpected provider is blocked unless the command includes `--allow-cross-provider BACKEND --approve`. The batch has a default backend, but an explicitly reviewed handoff can reassign a **stopped** feature to another CLI. Running `publish` pushes an integration branch and creates a PR; it never merges the PR.
 
 ## Optional Conductor Mode (v0.5)
 
