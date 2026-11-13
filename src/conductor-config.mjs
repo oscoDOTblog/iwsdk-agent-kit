@@ -24,9 +24,17 @@ export function validateConductorConfig(input = {}) {
     if (typeof cfg[key] !== 'boolean') throw new Error('conductor.' + key + ' must be boolean');
   }
   if (cfg.autoIntegrate !== false) throw new Error('Conductor cannot auto-integrate; autoIntegrate must be false');
-  backendName(cfg.provider);
-  if (!['claude', 'codex'].includes(cfg.provider)) {
-    throw new Error('Conductor AI is currently supported only for Claude and Codex');
+  if (cfg.provider === 'auto') {
+    // Model pins are provider-specific and must not leak into another CLI.
+    if (cfg.models && typeof cfg.models === 'object' && !Array.isArray(cfg.models) &&
+        Object.keys(cfg.models).length) {
+      throw new Error('conductor.models cannot be pinned when provider is "auto"');
+    }
+  } else {
+    backendName(cfg.provider);
+    if (!['claude', 'codex'].includes(cfg.provider)) {
+      throw new Error('Conductor AI is currently supported only for Claude and Codex');
+    }
   }
   for (const [key, min, max] of [
     ['maxParallelWorkers', 1, 3], ['maxWorkerStarts', 1, 100],
@@ -44,6 +52,18 @@ export function validateConductorConfig(input = {}) {
     validateModelPin(cfg.provider, model);
   }
   return { ...cfg, models: { ...cfg.models } };
+}
+/** Resolve AI planner/verifier provider only when those AI roles are enabled. */
+export function resolveConductorProvider(cfg, coordinator) {
+  if (cfg.provider !== 'auto' || (!cfg.aiPlanning && !cfg.aiVerification)) return cfg;
+  if (!coordinator) {
+    throw new Error('conductor.provider "auto" needs a detected coordinator; set IWSDK_AGENT_COORDINATOR');
+  }
+  if (!['claude', 'codex'].includes(coordinator.backend)) {
+    throw new Error('Conductor AI is currently supported only for Claude and Codex; ' +
+      'disable aiPlanning/aiVerification for ' + coordinator.backend);
+  }
+  return { ...cfg, provider: coordinator.backend };
 }
 export function readConductorConfig(repo) {
   const path = join(repo, 'iwsdk-agent-kit.config.json');
