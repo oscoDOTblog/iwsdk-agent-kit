@@ -45,6 +45,39 @@ A batch with no backend inherits the project setting. A batch JSON file,
 different provider. The runner also checks again at `start` so **old batches
 created before this policy are blocked** if they would use the wrong CLI.
 
+## Optional harness-following backend
+
+Set `"backend": "auto"` to intentionally use the CLI that is coordinating
+the batch. This is an **opt-in** setting, not cross-provider fallback:
+
+| Coordinator | Detection |
+| --- | --- |
+| Codex | `CODEX_THREAD_ID` |
+| Claude Code | `CLAUDECODE` |
+| OpenCode | `IWSDK_AGENT_COORDINATOR=opencode` |
+| Muse | `IWSDK_AGENT_COORDINATOR=muse` |
+
+An explicit `IWSDK_AGENT_COORDINATOR=codex|claude|opencode|muse` is also
+supported. Conflicting known markers or missing detection fail closed. The
+coordinator marker is a **caller assertion**, not an authentication mechanism.
+
+The resolved backend is stored when planning a batch; a later start from a
+different CLI is blocked by strict isolation unless the user explicitly
+authorizes that provider for that command. `conductor.provider: "auto"`
+also works for optional AI planner/verifier roles, but those roles currently
+support only Claude and Codex. Disable `aiPlanning` and `aiVerification`
+for OpenCode/Muse workers.
+
+## Upgrade safety
+
+`init` records the SHA-256 of each installed managed script in
+`.iwsdk-agent-kit.manifest.json`. An update may replace only an unchanged
+manifest-tracked script automatically (after backing it up). Customized or
+pre-manifest scripts are preserved and reported as conflicts. Review
+`init --dry-run` before `init --force-managed`; forcing explicitly replaces
+the affected scripts and creates content-hash backups. Existing configuration
+and custom agent files remain preserved.
+
 ## Deliberate cross-provider execution
 
 If you explicitly authorize using Muse workers while Codex is the project
