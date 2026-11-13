@@ -4,7 +4,7 @@ import { mkdtempSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { detectCoordinator, readProviderPolicy, enforceProviderIsolation } from '../src/provider-policy.mjs';
+import { detectCoordinator, readProviderPolicy, enforceProviderIsolation, resolveConfiguredBackend } from '../src/provider-policy.mjs';
 import { main } from '../src/orchestrator.mjs';
 import { install } from '../src/install.mjs';
 
@@ -169,3 +169,42 @@ test('installed project runner also blocks an unauthorized Claude subprocess', (
     assert.match(child.stderr, /Provider isolation blocked plan/);
     assert.equal(existsSync(statePath(dir)), false);
   }));
+
+test('backend auto follows the detected harness but never guesses or switches a pinned batch', () => {
+  assert.equal(resolveConfiguredBackend(undefined, { backend: 'claude' }), 'codex');
+  assert.equal(resolveConfiguredBackend('auto', { backend: 'claude' }), 'claude');
+  assert.equal(resolveConfiguredBackend('auto', { backend: 'opencode' }), 'opencode');
+  assert.equal(resolveConfiguredBackend('auto', { backend: 'muse' }), 'muse');
+  assert.throws(() => resolveConfiguredBackend('auto', null), /none was detected/);
+  for (const provider of ['codex', 'claude', 'opencode', 'muse']) {
+    const dir = createRepo('auto');
+    const policy = readProviderPolicy(dir, { IWSDK_AGENT_COORDINATOR: provider });
+    assert.equal(policy.configuredBackend, provider);
+    assert.equal(policy.auto, true);
+    assert.deepEqual(enforceProviderIsolation(policy, [provider], [], 'plan').requested, [provider]);
+  }
+  const dir = createRepo('auto');
+  assert.throws(() => readProviderPolicy(dir, {}), /none was detected/);
+  assert.throws(() => readProviderPolicy(dir, { CODEX_THREAD_ID: 'x', CLAUDECODE: '1' }), /Conflicting coordinator/);
+});
+
+test('auto backend freezes the planned provider; another harness cannot start it', () => {
+  const dir = createRepo('auto');
+  const cli = join(process.cwd(), 'bin', 'iwsdk-agent-kit.mjs');
+  const runCli = (provider, ...args) => spawnSync(process.execPath,
+    [cli, 'batch', ...args], { cwd: dir, encoding: 'utf8',
+      env: { ...process.env, IWSDK_AGENT_COORDINATOR: provider } });
+  const planned = runCli('claude', 'plan', 'features.json');
+  assert.equal(planned.status, 0, planned.stderr);
+  const state = JSON.parse(readFileSync(statePath(dir), 'utf8'));
+  assert.equal(state.backend, 'claude');
+  const mismatched = runCli('codex', 'start', 'provider-test', '--approve');
+  assert.notEqual(mismatched.status, 0);
+  assert.match(mismatched.stderr, /Provider isolation blocked start/);
+  assert.equal(existsSync(state.features[0].worktree), false);
+  const noCoordinator = spawnSync(process.execPath,
+    [cli, 'batch', 'plan', 'features.json'], { cwd: createRepo('auto'), encoding: 'utf8',
+      env: { ...process.env, IWSDK_AGENT_COORDINATOR: '', CODEX_THREAD_ID: '', CLAUDECODE: '' } });
+  assert.notEqual(noCoordinator.status, 0);
+  assert.match(noCoordinator.stderr, /none was detected/);
+});
