@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,30 +29,60 @@ function mergeSection(original, body) {
   if (start < 0 || end < start || original.indexOf(managedStart, start + 1) >= 0) throw Error('Malformed managed instruction section');
   return original.slice(0, start) + section + original.slice(end + managedEnd.length);
 }
-export function install(root = process.cwd(), { dryRun = false } = {}) {
+const sha256 = value => createHash('sha256').update(value).digest('hex');
+export function install(root = process.cwd(), { dryRun = false, forceManaged = false } = {}) {
   const pkgPath = join(root, 'package.json');
   if (!existsSync(pkgPath)) throw Error('Run inside a project with package.json');
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
   const detected = inspectProject(root);
   const actions = [];
+  const manifestPath = join(root, '.iwsdk-agent-kit.manifest.json');
+  if (existsSync(manifestPath) && !lstatSync(manifestPath).isFile()) {
+    throw new Error('Refusing non-regular installer manifest');
+  }
+  const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) :
+    { version: 1, managed: {} };
+  if (manifest.version !== 1 || !manifest.managed ||
+      typeof manifest.managed !== 'object' || Array.isArray(manifest.managed) ||
+      Object.values(manifest.managed).some(v => typeof v !== 'string' || !/^[a-f0-9]{64}$/.test(v))) {
+    throw new Error('Malformed installer manifest; refusing managed script overwrite');
+  }
+  const nextManaged = { ...manifest.managed };
   const write = (path, content, mode = 'managed') => {
-    if (existsSync(path)) {
-      const previous = readFileSync(path, 'utf8');
-      if (previous === content) { actions.push({path,action:'unchanged'}); return; }
-      if (mode === 'new-only') { actions.push({path,action:'conflict',reason:'Existing unmanaged file preserved'}); return; }
+    const managedScript = mode === 'managed-script';
+    const rel = relative(root, path);
+    const existed = existsSync(path);
+    if (existed && !lstatSync(path).isFile()) {
+      actions.push({ path, action: 'conflict', reason: 'Non-regular file preserved' });
+      return;
     }
-    if (existsSync(path) && mode === 'managed') {
-      const previous = readFileSync(path, 'utf8');
-      const hash = createHash('sha256').update(previous).digest('hex').slice(0, 12);
-      const backup = join(root, '.iwsdk-agent-kit-backups', relative(root, path) + '.' + hash + '.bak');
-      actions.push({path,action:'backup',backup});
+    const previous = existed ? readFileSync(path, 'utf8') : null;
+    if (previous === content) {
+      actions.push({ path, action: 'unchanged' });
+      if (managedScript) nextManaged[rel] = sha256(content);
+      return;
+    }
+    if (existed && mode === 'new-only') {
+      actions.push({ path, action: 'conflict', reason: 'Existing unmanaged file preserved' });
+      return;
+    }
+    if (existed && managedScript && !forceManaged &&
+        manifest.managed[rel] !== sha256(previous)) {
+      actions.push({ path, action: 'conflict',
+        reason: 'Locally modified or legacy runner preserved; review diff and use --force-managed to back up and replace explicitly' });
+      return;
+    }
+    if (existed && (mode === 'managed' || managedScript)) {
+      const backup = join(root, '.iwsdk-agent-kit-backups', rel + '.' + sha256(previous).slice(0, 12) + '.bak');
+      actions.push({ path, action: 'backup', backup });
       if (!dryRun && !existsSync(backup)) {
-        mkdirSync(dirname(backup), {recursive:true});
+        mkdirSync(dirname(backup), { recursive: true });
         writeFileSync(backup, previous);
       }
     }
-    actions.push({path,action:existsSync(path)?'update':'create'});
-    if (!dryRun) { mkdirSync(dirname(path), {recursive:true}); writeFileSync(path,content); }
+    actions.push({ path, action: existed ? 'update' : 'create' });
+    if (managedScript) nextManaged[rel] = sha256(content);
+    if (!dryRun) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); }
   };
   for (const [from,to] of [
     ['src/orchestrator.mjs','scripts/agents.mjs'],
@@ -75,7 +105,7 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
     const dest = join(root,to), source = join(kitRoot,from);
     const text = readFileSync(source,'utf8').replace("'./backends.mjs'","'./backends.mjs'");
     // Never overwrite preexisting user agent files.
-    write(dest,text,to.startsWith('scripts/')?'managed':'new-only');
+    write(dest,text,to.startsWith('scripts/')?'managed-script':'new-only');
   }
   const contextPath = join(root, 'AGENT_CONTEXT.md');
   write(contextPath, readFileSync(join(kitRoot, 'templates/AGENT_CONTEXT.md'), 'utf8'), 'new-only');
@@ -105,6 +135,11 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
     pkg.scripts[name]=value;
   }
   write(pkgPath,JSON.stringify(pkg,null,2)+'\n');
+  const nextManifest = JSON.stringify({ version: 1, managed: nextManaged }, null, 2) + '\n';
+  if (!existsSync(manifestPath) || readFileSync(manifestPath, 'utf8') !== nextManifest) {
+    actions.push({ path: manifestPath, action: existsSync(manifestPath) ? 'update' : 'create' });
+    if (!dryRun) writeFileSync(manifestPath, nextManifest);
+  }
   return actions;
 }
 import { spawnSync } from 'node:child_process';
