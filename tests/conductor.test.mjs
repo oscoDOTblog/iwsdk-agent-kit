@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { validateConductorConfig, readConductorConfig } from '../src/conductor-config.mjs';
+import { validateConductorConfig, readConductorConfig, resolveConductorProvider } from '../src/conductor-config.mjs';
 import { plannerPrompt, verifierPrompt, validatePlanner, validateVerifier,
   coordinatorInvocation, runCoordinatorRole } from '../src/conductor-ai.mjs';
 import { syncEvidence, recordEvidence, inspectEvidence } from '../src/evidence.mjs';
@@ -236,4 +236,21 @@ test('conductor prioritization never bypasses feature dependencies', () => {
     { ...feature(), id: 'toy' }, { ...feature(), id: 'npc', owns: ['src/npc/'], dependsOn: ['toy'] },
   ] });
   assert.equal(parsed.features[1].dependsOn[0], 'toy');
+});
+
+test('conductor auto AI roles follow only supported harnesses and retain all budget validation', () => {
+  const auto = validateConductorConfig({ enabled: true, provider: 'auto' });
+  assert.equal(resolveConductorProvider(auto, { backend: 'claude' }).provider, 'claude');
+  assert.equal(resolveConductorProvider(auto, { backend: 'codex' }).provider, 'codex');
+  assert.throws(() => resolveConductorProvider(auto, null), /needs a detected coordinator/);
+  assert.throws(() => resolveConductorProvider(auto, { backend: 'muse' }), /only for Claude and Codex/);
+  assert.throws(() => resolveConductorProvider(auto, { backend: 'opencode' }), /only for Claude and Codex/);
+  const noAi = validateConductorConfig({ enabled: true, provider: 'auto',
+    aiPlanning: false, aiVerification: false });
+  assert.equal(resolveConductorProvider(noAi, { backend: 'muse' }).provider, 'auto');
+  assert.equal(resolveConductorProvider(noAi, null).provider, 'auto');
+  assert.throws(() => validateConductorConfig({ provider: 'auto', models: { planner: 'opus' } }), /cannot be pinned/);
+  assert.throws(() => validateConductorConfig({ provider: 'auto', maxWorkerStarts: 0 }), /integer between/);
+  assert.throws(() => validateConductorConfig({ provider: 'auto', autoIntegrate: true }), /cannot auto-integrate/);
+  assert.throws(() => validateConductorConfig({ provider: 'auto', models: [] }), /must be a map/);
 });
