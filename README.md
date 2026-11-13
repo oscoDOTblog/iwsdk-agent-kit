@@ -16,7 +16,7 @@ npx iwsdk-agent-kit init
 
 The installer copies the runner into `scripts/`, installs project-local agent definitions, and merges a clearly delimited managed section into `AGENTS.md` and `CLAUDE.md`. It also creates `AGENT_CONTEXT.md` if missing. Existing unmanaged agent files are preserved and reported as conflicts. It adds `agents:*` scripts to `package.json`. The installer records SHA-256 hashes for installed runner scripts in
 `.iwsdk-agent-kit.manifest.json`. A clean manifest-matched script can be updated
-(with a backup); locally modified or legacy scripts are **preserved as conflicts**
+(with a backup); locally modified or legacy scripts are **preserved as conflicts**, and no managed runner scripts are partially upgraded
 instead of silently overwritten. To intentionally replace one after reviewing
 the diff, run `npx iwsdk-agent-kit init --dry-run --force-managed`, then
 `npx iwsdk-agent-kit init --force-managed`. Backups are written to
