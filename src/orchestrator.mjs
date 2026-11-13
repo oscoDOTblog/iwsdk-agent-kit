@@ -352,7 +352,10 @@ function cleanup(state) {
     if (f.status !== 'collected' || !existsSync(f.worktree)) continue;
     if (git(f.worktree, 'branch', '--show-current') !== f.branch || git(f.worktree, 'rev-parse', 'HEAD') !== f.head) fail(`Changed worktree preserved: ${f.worktree}`);
     if (!clean(f.worktree)) fail(`Dirty worktree preserved: ${f.worktree}`);
-    const ignored = git(f.worktree, 'ls-files', '--others', '--ignored', '--exclude-standard').split('\n').filter(p => p && !p.startsWith('node_modules/') && !p.startsWith('dist/'));
+    // --directory collapses ignored trees such as node_modules into one entry,
+    // avoiding ENOBUFS from enumerating tens of thousands of dependency files.
+    const ignored = git(f.worktree, 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory')
+      .split('\n').filter(p => p && !/^(node_modules|dist)(\/|$)/.test(p));
     if (ignored.length) fail(`Ignored personal/runtime files preserved: ${f.worktree}: ${ignored.slice(0, 5).join(', ')}`);
     git(i.worktree, 'merge-base', '--is-ancestor', f.head, 'HEAD');
     git(state.repo, 'worktree', 'remove', f.worktree);
