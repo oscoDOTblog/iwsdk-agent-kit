@@ -61,8 +61,7 @@ test('legacy installs without manifest preserve scripts until explicit backed-up
   const result = install(root);
   assert.ok(result.some(x => x.path === script(root) && x.action === 'conflict'));
   assert.equal(readFileSync(script(root), 'utf8'), legacy);
-  const data = JSON.parse(readFileSync(manifest(root), 'utf8'));
-  assert.equal(data.managed['scripts/agents.mjs'], undefined);
+  assert.equal(existsSync(manifest(root)), false, 'no partial manifest written on conflict');
   const forced = install(root, { forceManaged: true });
   assert.ok(forced.some(x => x.path === script(root) && x.action === 'backup'));
   assert.notEqual(readFileSync(script(root), 'utf8'), legacy);
@@ -96,4 +95,22 @@ test('symlinked runner and manifest are not followed', () => {
   rmSync(manifest(root));
   symlinkSync(external, manifest(root));
   assert.throws(() => install(root), /non-regular installer manifest/);
+});
+
+test('one customized script prevents a partial upgrade of other clean scripts', () => {
+  const root = fixture();
+  install(root);
+  const second = join(root, 'scripts', 'backends.mjs');
+  const old = '// old but manifest-tracked backends\n';
+  writeFileSync(second, old);
+  const data = JSON.parse(readFileSync(manifest(root), 'utf8'));
+  data.managed['scripts/backends.mjs'] = hash(old);
+  writeFileSync(manifest(root), JSON.stringify(data, null, 2) + '\n');
+  const previousManifest = readFileSync(manifest(root), 'utf8');
+  writeFileSync(script(root), '// custom runner\n');
+  const result = install(root);
+  assert.ok(result.some(x => x.path === script(root) && x.action === 'conflict'));
+  assert.equal(readFileSync(second, 'utf8'), old, 'otherwise-safe script must not update alone');
+  assert.equal(readFileSync(manifest(root), 'utf8'), previousManifest);
+  assert.equal(readFileSync(script(root), 'utf8'), '// custom runner\n');
 });
