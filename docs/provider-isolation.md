@@ -73,7 +73,7 @@ for OpenCode/Muse workers.
 `init` records the SHA-256 of each installed managed script in
 `.iwsdk-agent-kit.manifest.json`. An update may replace only an unchanged
 manifest-tracked script automatically (after backing it up). Customized or
-pre-manifest scripts are preserved and reported as conflicts. Review
+pre-manifest scripts are preserved and reported as conflicts. A conflict aborts the managed-script update before any runner or package files are changed. Review
 `init --dry-run` before `init --force-managed`; forcing explicitly replaces
 the affected scripts and creates content-hash backups. Existing configuration
 and custom agent files remain preserved.
