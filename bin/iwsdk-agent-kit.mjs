@@ -19,6 +19,6 @@ try {
     console.log(flags.includes('--json') ? JSON.stringify(report, null, 2) : formatCacheAudit(report));
   }
   else if (command === 'batch') await orchestrate(flags, target);
-  else if (!command || command === '--help' || command === '-h') console.log('iwsdk-agent-kit init [--dry-run] | doctor | cache-audit [--json] | batch plan|start|status|usage|review-prompt|checkpoint|handoff|retry|collect|integrate|publish|cleanup (cross-provider: --allow-cross-provider BACKEND --approve)');
+  else if (!command || command === '--help' || command === '-h') console.log('iwsdk-agent-kit init [--dry-run] | doctor | cache-audit [--json] | batch plan|start|conduct|conduct-status|status|usage|evidence|review-prompt|checkpoint|handoff|retry|collect|integrate|publish|cleanup (cross-provider: --allow-cross-provider BACKEND --approve)');
   else throw Error('Unknown command: ' + command);
 } catch (error) { console.error(error.message); process.exitCode = 1; }

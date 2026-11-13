@@ -19,7 +19,9 @@ Read AGENT_CONTEXT.md before work and the coordinator's task checkpoint when res
 Only the coordinator updates AGENT_CONTEXT.md between batches; workers must not race to edit it.
 Keep shared XR/browser/headset sessions exclusive to one worker.
 Do not invent SDK APIs, overwrite unrelated work, or claim unexecuted tests.
-Do not push, merge or deploy without explicit approval.`;
+Do not push, merge or deploy without explicit approval.
+Conductor Mode is opt-in, requires --approve, and never bypasses provider isolation.
+Do not treat model-generated review notes as evidence or allow auto-integration.`;
 function mergeSection(original, body) {
   const section = `${managedStart}\n${body}\n${managedEnd}`;
   if (!original.includes(managedStart) && !original.includes(managedEnd)) return original.trimEnd() + (original.trim() ? '\n\n' : '') + section + '\n';
@@ -61,6 +63,10 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
     ['src/usage.mjs','scripts/usage.mjs'],
     ['src/review.mjs','scripts/review.mjs'],
     ['src/cache-audit.mjs','scripts/cache-audit.mjs'],
+    ['src/conductor-config.mjs','scripts/conductor-config.mjs'],
+    ['src/conductor-ai.mjs','scripts/conductor-ai.mjs'],
+    ['src/conductor.mjs','scripts/conductor.mjs'],
+    ['src/evidence.mjs','scripts/evidence.mjs'],
     ['templates/.codex/agents/feature_engineer.toml','.codex/agents/feature_engineer.toml'],
     ['templates/.claude/agents/feature-engineer.md','.claude/agents/feature-engineer.md'],
     ['templates/.opencode/agents/feature-engineer.md','.opencode/agents/feature-engineer.md'],
@@ -91,7 +97,7 @@ export function install(root = process.cwd(), { dryRun = false } = {}) {
   })() : 'main';
   const config=join(root,'iwsdk-agent-kit.config.json');
   write(config,JSON.stringify({version:2,baseBranch:base,backend:'codex',providerIsolation:'strict',maxConcurrency:2,detectedSDK:detected.sdk},null,2)+'\n','new-only');
-  const scripts={plan:'node scripts/agents.mjs plan',start:'node scripts/agents.mjs start',status:'node scripts/agents.mjs status',usage:'node scripts/agents.mjs usage','cache-audit':'node scripts/cache-audit.mjs','review-prompt':'node scripts/agents.mjs review-prompt',checkpoint:'node scripts/agents.mjs checkpoint',handoff:'node scripts/agents.mjs handoff',retry:'node scripts/agents.mjs retry',collect:'node scripts/agents.mjs collect',integrate:'node scripts/agents.mjs integrate',publish:'node scripts/agents.mjs publish',cleanup:'node scripts/agents.mjs cleanup'};
+  const scripts={plan:'node scripts/agents.mjs plan',start:'node scripts/agents.mjs start',status:'node scripts/agents.mjs status',conduct:'node scripts/agents.mjs conduct','conduct-status':'node scripts/agents.mjs conduct-status',evidence:'node scripts/agents.mjs evidence',usage:'node scripts/agents.mjs usage','cache-audit':'node scripts/cache-audit.mjs','review-prompt':'node scripts/agents.mjs review-prompt',checkpoint:'node scripts/agents.mjs checkpoint',handoff:'node scripts/agents.mjs handoff',retry:'node scripts/agents.mjs retry',collect:'node scripts/agents.mjs collect',integrate:'node scripts/agents.mjs integrate',publish:'node scripts/agents.mjs publish',cleanup:'node scripts/agents.mjs cleanup'};
   pkg.scripts ??= {};
   for(const [key,value] of Object.entries(scripts)) {
     const name='agents:'+key;
