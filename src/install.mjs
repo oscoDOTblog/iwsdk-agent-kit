@@ -89,7 +89,7 @@ export function install(root = process.cwd(), { dryRun = false, forceManaged = f
     if (managedScript) nextManaged[rel] = sha256(content);
     if (!dryRun) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); }
   };
-  for (const [from,to] of [
+  const entries = [
     ['src/orchestrator.mjs','scripts/agents.mjs'],
     ['src/backends.mjs','scripts/backends.mjs'],
     ['src/handoff.mjs','scripts/handoff.mjs'],
@@ -106,7 +106,27 @@ export function install(root = process.cwd(), { dryRun = false, forceManaged = f
     ['templates/.claude/agents/feature-engineer.md','.claude/agents/feature-engineer.md'],
     ['templates/.opencode/agents/feature-engineer.md','.opencode/agents/feature-engineer.md'],
     ['templates/.agents/agents/feature-engineer.md','.agents/agents/feature-engineer.md']
-  ]) {
+  ];
+  // Preflight the entire managed runner set before writing any files. A mixed
+  // version (some scripts updated, others customized) can be worse than a
+  // clean refusal, even if every overwritten file has a backup.
+  const conflicts = [];
+  for (const [from, to] of entries.filter(([, to]) => to.startsWith('scripts/'))) {
+    const path = join(root, to), kind = fileKind(path);
+    if (kind === 'other') {
+      conflicts.push({ path, action: 'conflict', reason: 'Non-regular managed script preserved' });
+      continue;
+    }
+    if (kind === 'missing') continue;
+    const previous = readFileSync(path, 'utf8');
+    const incoming = readFileSync(join(kitRoot, from), 'utf8');
+    if (previous !== incoming && !forceManaged && manifest.managed[to] !== sha256(previous)) {
+      conflicts.push({ path, action: 'conflict',
+        reason: 'Locally modified or legacy runner preserved; review diff and use --force-managed to back up and replace explicitly' });
+    }
+  }
+  if (conflicts.length) return conflicts; // No partial script or package updates.
+  for (const [from,to] of entries) {
     const dest = join(root,to), source = join(kitRoot,from);
     const text = readFileSync(source,'utf8').replace("'./backends.mjs'","'./backends.mjs'");
     // Never overwrite preexisting user agent files.
